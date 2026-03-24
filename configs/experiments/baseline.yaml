@@ -1,0 +1,23 @@
+# Baseline experiment — inherits from default.yaml
+# Run: python scripts/train.py --config configs/experiments/baseline.yaml
+
+experiment:
+  name: "baseline_unet_ncc"
+  tags: ["baseline"]
+
+model:
+  name: "UNetRegistration"
+  base_features: 16
+  depth: 4
+  int_steps: 7
+
+loss:
+  similarity: "ncc"
+  similarity_weight: 1.0
+  regularization: "bending"
+  regularization_weight: 0.01
+
+training:
+  epochs: 200
+  batch_size: 1
+  lr: 1.0e-4

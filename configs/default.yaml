@@ -1,0 +1,60 @@
+# ============================================================
+# Default experiment configuration
+# Override fields in configs/experiments/<name>.yaml
+# ============================================================
+
+experiment:
+  name: "baseline"
+  seed: 42
+  output_dir: "results"
+  tags: []                  # e.g. ["ablation", "v2"]
+
+data:
+  root: "data"
+  train_split: 0.7
+  val_split: 0.15
+  test_split: 0.15
+  image_size: [192, 192, 160]   # (H, W, D) — set depth=1 for 2D
+  num_workers: 4
+  pin_memory: true
+  augmentation: true
+
+model:
+  name: "UNetRegistration"      # must match a key in src/models/__init__.py
+  in_channels: 2               # moving + fixed concatenated
+  base_features: 16
+  depth: 4
+  int_steps: 7                 # integration steps for diffeomorphic variant (0 = disabled)
+
+loss:
+  similarity: "ncc"            # ncc | mse | ssim
+  similarity_weight: 1.0
+  regularization: "bending"    # l2 | bending | none
+  regularization_weight: 0.01
+
+training:
+  epochs: 200
+  batch_size: 1
+  optimizer: "adam"
+  lr: 1.0e-4
+  weight_decay: 1.0e-5
+  lr_scheduler: "cosine"      # step | cosine | plateau | none
+  lr_min: 1.0e-6
+  gradient_clip: 1.0
+  early_stopping_patience: 20  # epochs without val improvement; 0 = disabled
+  val_every: 1                 # validate every N epochs
+  log_every: 10                # log metrics every N steps
+
+evaluation:
+  metrics:
+    - ncc
+    - ssim
+    - dice          # requires segmentation labels
+    - jacobian_det  # measures deformation regularity
+  bootstrap_n: 1000           # samples for confidence intervals
+  significance_alpha: 0.05
+
+logging:
+  backend: "tensorboard"       # tensorboard | wandb | both | none
+  wandb_project: "image-registration"
+  wandb_entity: ""

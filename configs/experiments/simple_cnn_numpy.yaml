@@ -1,0 +1,51 @@
+# Minimal CNN on numpy data — good for quick iteration and debugging
+# Run: python scripts/train_numpy.py --config configs/experiments/simple_cnn_numpy.yaml
+
+experiment:
+  name: "simple_cnn_numpy"
+  seed: 42
+  output_dir: "results"
+  tags: ["demo"]
+
+data:
+  root: "data"
+  format: "numpy"
+  image_size: [64, 64]
+  num_pairs: 200         # virtual train set size
+  num_workers: 0         # keep 0 on Windows to avoid multiprocessing issues
+
+model:
+  name: "SimpleCNN"
+  in_channels: 1     # grayscale — model concatenates moving+fixed internally (1*2=2)
+  features: 32
+  depth: 4
+  int_steps: 0
+
+loss:
+  similarity: "ncc"
+  similarity_weight: 1.0
+  regularization: "l2"
+  regularization_weight: 0.01
+
+training:
+  epochs: 50
+  batch_size: 4
+  optimizer: "adam"
+  lr: 1.0e-4
+  weight_decay: 0.0
+  lr_scheduler: "cosine"
+  lr_min: 1.0e-6
+  gradient_clip: 1.0
+  early_stopping_patience: 10
+  val_every: 1
+
+evaluation:
+  metrics:
+    - ncc
+    - ssim
+    - jacobian_det
+  bootstrap_n: 200
+  significance_alpha: 0.05
+
+logging:
+  backend: "tensorboard"

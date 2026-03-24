@@ -1,0 +1,36 @@
+# Core
+torch>=2.1.0
+torchvision>=0.16.0
+numpy>=1.24.0
+
+# Scientific computing
+scipy>=1.11.0
+scikit-image>=0.21.0
+scikit-learn>=1.3.0
+SimpleITK>=2.3.0
+
+# Config management
+omegaconf>=2.3.0
+pyyaml>=6.0
+
+# Experiment tracking
+tensorboard>=2.14.0
+wandb>=0.16.0          # optional, comment out if not using W&B
+
+# Visualization & analysis
+matplotlib>=3.7.0
+seaborn>=0.13.0
+pandas>=2.0.0
+
+# Progress & utilities
+tqdm>=4.66.0
+
+# Statistical testing (for paper results)
+pingouin>=0.5.3        # ANOVA, effect sizes, post-hoc tests
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# Formatting / linting (dev only)
+ruff>=0.1.0

@@ -1,0 +1,74 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Data (typically too large for git — use DVC or symlinks)
+data/raw/
+data/processed/
+*.nii
+*.nii.gz
+*.mha
+*.mhd
+*.dcm
+*.nrrd
+*.h5
+*.hdf5
+
+# Model checkpoints (track configs, not weights — use model registry)
+results/checkpoints/
+*.pt
+*.pth
+*.ckpt
+!tests/fixtures/*.pt
+
+# Experiment outputs
+results/runs/
+wandb/
+.hydra/
+mlruns/
+lightning_logs/
+
+# Logs
+*.log
+logs/
+
+# Environment
+.env
+.env.*
+
+# Profiling
+*.prof
+
+# Keep directory structure
+!results/.gitkeep
+!results/tables/.gitkeep
+!results/figures/.gitkeep
+!data/.gitkeep

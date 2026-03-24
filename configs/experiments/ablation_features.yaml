@@ -1,0 +1,13 @@
+# Ablation: effect of base feature count
+# Used by scripts/ablation.py
+
+experiment:
+  name: "ablation_base_features"
+  tags: ["ablation"]
+
+ablation:
+  param: "model.base_features"
+  values: [8, 16, 32, 64]
+
+training:
+  epochs: 100     # shorter for ablation sweeps

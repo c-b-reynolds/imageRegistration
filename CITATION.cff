@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite it as below."
+type: software
+title: "Image Registration with Neural Networks"
+version: 0.1.0
+date-released: 2026-03-24
+authors:
+  - family-names: ""
+    given-names: ""
+    orcid: ""
+    affiliation: ""
+repository-code: ""
+abstract: >
+  PyTorch framework for training, evaluating, and comparing neural network
+  architectures for image registration, developed for reproducible research.
+keywords:
+  - image registration
+  - deep learning
+  - pytorch
+  - medical imaging
+license: MIT
