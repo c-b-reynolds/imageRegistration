@@ -241,7 +241,7 @@ def main():
     print(f"Training for {cfg['training']['epochs']} epochs  "
           f"| reg_weight={cfg['loss']['regularization_weight']}  "
           f"| rotation=True  "
-          f"| erasing={not args.no_erasing}\n")
+          f"| erasing={cfg['augmentation']['use_erasing']}\n")
 
     trainer.fit(
         train_loader=train_loader,
