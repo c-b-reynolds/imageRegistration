@@ -1,0 +1,65 @@
+# =============================================================================
+# DirectHybridRegistration — SAR patch-pair training config
+#
+# Same HybridVelocityNet architecture but predicts the full displacement field
+# in a single forward pass — no ODE integration.
+#
+# Usage:
+#   python scripts/train_hybrid_patches.py \
+#       --config configs/experiments/direct_hybrid_sar.yaml \
+#       --patches dataset/patches.npy
+# =============================================================================
+
+experiment:
+  name: direct_hybrid_sar
+  seed: 42
+  output_dir: outputs
+
+data:
+  patches_path: dataset/patches.npy
+  val_frac:  0.15
+  test_frac: 0.15
+  seed: 42
+  num_workers: 0
+
+model:
+  name: DirectHybridRegistration
+  in_channels:        1
+  stem_channels:      32
+  kernel_size:        8
+  stride:             8
+  padding:            0
+  pool_type:          max
+  stem_hidden_dim:    32
+  embed_dim:          64
+  num_encoder_layers: 2
+  num_decoder_layers: 2
+  nhead:              4
+  ffn_dim:            256
+  tgt_mode:           encoder_output
+  dropout:            0.1
+
+loss:
+  similarity:            ncc
+  regularization:        deformation_gradient
+  similarity_weight:     1.0
+  regularization_weight: 0.1
+  ncc_win:               21
+
+training:
+  epochs:                   50
+  batch_size:               16
+  optimizer:                adam
+  lr:                       1.0e-4
+  weight_decay:             1.0e-5
+  lr_scheduler:             cosine
+  lr_min:                   1.0e-6
+  gradient_clip:            1.0
+  early_stopping_patience:  10
+  val_every:                1
+
+augmentation:
+  use_rotation:  true
+  use_erasing:   true
+  erasing_scale: [0.02, 0.2]
+  erasing_ratio: [0.3,  3.0]
