@@ -219,7 +219,10 @@ class HaarDecoder(nn.Module):
             ch //= 4
             if i < n_stages - 1:
                 layers.append(nn.GELU())
-        layers.append(nn.Conv2d(ch, out_channels, kernel_size=1))
+        out_conv = nn.Conv2d(ch, out_channels, kernel_size=1)
+        nn.init.zeros_(out_conv.weight)
+        nn.init.zeros_(out_conv.bias)
+        layers.append(out_conv)
         self.upsample = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
