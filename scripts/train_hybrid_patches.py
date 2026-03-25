@@ -198,7 +198,7 @@ def main():
     patch_size = patches.shape[-1]
     print(f"Patches: {patches.shape}  patch_size={patch_size}")
 
-    cfg["model"]["image_size"] = (patch_size, patch_size)
+    cfg["model"]["image_size"] = [patch_size, patch_size]
 
     set_seed(cfg["experiment"]["seed"], deterministic=False)
     device = get_device()
