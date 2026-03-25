@@ -103,22 +103,33 @@ def main():
         fig.savefig(out_dir / f"sample_{n_saved:03d}_registration.png", dpi=150, bbox_inches="tight")
         plt.close(fig)
 
-        # --- Deformation field magnitude ---
+        # --- Deformation / velocity field magnitude ---
         if "phi" in out:
             phi = out["phi"][0].cpu().numpy()  # (2, H, W)  normalized [-1,1] coords
             H, W = phi.shape[1], phi.shape[2]
-            # Convert to pixel displacement
-            dx = phi[0] * (W - 1) / 2.0
-            dy = phi[1] * (H - 1) / 2.0
-            # Displacement from identity
-            xs = np.linspace(-1, 1, W) * (W - 1) / 2.0
-            ys = np.linspace(-1, 1, H) * (H - 1) / 2.0
-            grid_x, grid_y = np.meshgrid(xs, ys)
-            disp_mag = np.sqrt((dx - grid_x) ** 2 + (dy - grid_y) ** 2)
+
+            is_eulerian = cfg["model"]["name"] == "EulerianHybridODERegistration"
+
+            if is_eulerian:
+                # phi is the instantaneous velocity field — magnitude in pixel units
+                disp_mag = np.sqrt(
+                    (phi[0] * (W - 1) / 2.0) ** 2 +
+                    (phi[1] * (H - 1) / 2.0) ** 2
+                )
+                field_title = "Velocity magnitude (pixels/unit time)"
+            else:
+                # phi is an integrated position field — subtract identity to get displacement
+                dx = phi[0] * (W - 1) / 2.0
+                dy = phi[1] * (H - 1) / 2.0
+                xs = np.linspace(-1, 1, W) * (W - 1) / 2.0
+                ys = np.linspace(-1, 1, H) * (H - 1) / 2.0
+                grid_x, grid_y = np.meshgrid(xs, ys)
+                disp_mag = np.sqrt((dx - grid_x) ** 2 + (dy - grid_y) ** 2)
+                field_title = "Displacement magnitude (pixels)"
 
             fig, ax = plt.subplots(1, 1, figsize=(4, 4))
             im = ax.imshow(disp_mag, cmap="viridis")
-            ax.set_title("Displacement magnitude (pixels)", fontsize=10)
+            ax.set_title(field_title, fontsize=10)
             ax.axis("off")
             fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
             fig.tight_layout()
