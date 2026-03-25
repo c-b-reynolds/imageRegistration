@@ -200,7 +200,7 @@ def main():
 
     cfg["model"]["image_size"] = (patch_size, patch_size)
 
-    set_seed(cfg["experiment"]["seed"])
+    set_seed(cfg["experiment"]["seed"], deterministic=False)
     device = get_device()
     print(f"Device: {device}\n")
 
