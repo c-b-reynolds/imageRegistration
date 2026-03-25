@@ -1,4 +1,5 @@
 from .base import BaseRegistrationModel
+from .eulerian_hybrid_registration import EulerianHybridODERegistration
 from .hybrid_ode_registration import HybridODERegistration
 from .neural_ode_registration import NeuralODERegistration
 from .simple_cnn import SimpleCNN
@@ -10,6 +11,7 @@ REGISTRY: dict = {
     "SimpleCNN": SimpleCNN,
     "NeuralODERegistration": NeuralODERegistration,
     "HybridODERegistration": HybridODERegistration,
+    "EulerianHybridODERegistration": EulerianHybridODERegistration,
 }
 
 
@@ -24,4 +26,5 @@ def build_model(name: str, **kwargs) -> BaseRegistrationModel:
 
 
 __all__ = ["BaseRegistrationModel", "UNetRegistration", "SimpleCNN",
-           "NeuralODERegistration", "HybridODERegistration", "REGISTRY", "build_model"]
+           "NeuralODERegistration", "HybridODERegistration",
+           "EulerianHybridODERegistration", "REGISTRY", "build_model"]
