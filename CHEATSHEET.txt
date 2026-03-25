@@ -5,7 +5,12 @@
 SETUP (first time only)
 ------------------------
 pip install -r requirements.txt
-python scripts/generate_dummy_data.py      # creates data/ with dummy .npy files
+
+# For numpy/atlas-based dummy data:
+python scripts/generate_dummy_data.py
+
+# For SAR patch-pair dummy data:
+python scripts/train_hybrid_patches.py      # auto-generates patches if absent
 
 
 --------------------------------------------------------------------------------
@@ -15,9 +20,15 @@ python scripts/generate_dummy_data.py      # creates data/ with dummy .npy files
   SimpleCNN              Minimal CNN, fast, good baseline
   NeuralODERegistration  Transport ODE with CNN velocity network
   HybridODERegistration  Transport ODE with Gated Stem + Transformer velocity net
+                         Also integrates the full deformation field phi jointly.
   UNetRegistration       Full UNet encoder-decoder (3D capable)
 
-Each model has a matching config in configs/experiments/.
+All models forward(moving, fixed) → dict.
+HybridODERegistration returns:
+  "warped"     (B, 1, H, W)     registered moving image at t=1
+  "phi"        (B, 2, H, W)     final deformation field in [-1,1] coords
+  "flow"       (B, 2, H, W)     instantaneous velocity at t=0 (diagnostic)
+  "trajectory" (n_t, B, 1, H,W) image states from t=0 to t=1
 
 
 --------------------------------------------------------------------------------
@@ -39,26 +50,52 @@ Key sections:
     adjoint:           true = O(1) memory backprop, false = faster on small images
 
   loss:
-    similarity:        "ncc" | "mse" | "ssim"
-    regularization:    "l2" | "bending" | "none"
-    regularization_weight: tune this if deformations look too smooth or too wild
+    similarity:            "ncc" | "mse" | "ssim"
+    regularization:        "l2" | "bending" | "deformation_gradient" | "none"
+    regularization_weight: weight on the regularization term
+                           deformation_gradient is on the same scale as NCC,
+                           so regularization_weight=0.1 is a sensible start.
 
   training:
     epochs / batch_size / lr / lr_scheduler / early_stopping_patience
 
-To change a hyperparameter, either:
+  augmentation:            (patch-pair training only)
+    use_rotation:          random 90/180/270 rotation, same for both images
+    use_erasing:           SAR-aware random erasing (independent per image)
+    erasing_scale:         [min, max] fraction of patch area  e.g. [0.02, 0.2]
+    erasing_ratio:         [min, max] aspect ratio            e.g. [0.3, 3.0]
 
-  Option A — edit the YAML directly, then train as normal.
-
-  Option B — CLI override (no file edit needed):
+To change a hyperparameter without editing YAML:
     python scripts/train_numpy.py \
         --config configs/experiments/hybrid_ode_numpy.yaml \
         model.embed_dim=512 \
         training.lr=5e-4 \
         experiment.name=my_new_run
 
-  Always set a unique experiment.name when sweeping — each name gets its own
-  folder under results/ so runs never overwrite each other.
+  Always set a unique experiment.name when sweeping.
+
+
+--------------------------------------------------------------------------------
+ REGULARIZATION — DEFORMATION GRADIENT
+--------------------------------------------------------------------------------
+
+The "deformation_gradient" regularizer penalizes the final integrated
+deformation field phi (not the instantaneous velocity):
+
+    loss_reg = reg_weight * mean( ||J_u||^2_F )
+
+where u = phi - identity is the displacement in pixel units, and J_u is its
+Jacobian computed via forward differences. This gives dimensionless strain
+(pixels/pixel) naturally on the same scale as NCC.
+
+The regularizer is applied to out["phi"] from HybridODERegistration, which is
+the true flow map obtained by integrating phi alongside f in the ODE — not a
+sum-of-velocities approximation.
+
+Use it via:
+    loss:
+      regularization: "deformation_gradient"
+      regularization_weight: 0.1   # increase for smoother deformations
 
 
 --------------------------------------------------------------------------------
@@ -67,58 +104,69 @@ To change a hyperparameter, either:
 
 The number of Haar decoder stages is computed automatically from:
     n_stages = log2(image_size / H')
-where H' = floor((image_size - kernel_size) / stride) + 1
+where H' = floor((image_size + 2*padding - kernel_size) / stride) + 1
 
 The downsampling ratio (image_size / H') MUST be a power of 2.
 embed_dim MUST be divisible by 4^n_stages.
 
-Common valid settings for 64x64 images:
+Common valid settings:
 
-  Non-overlapping:  kernel_size=8,  stride=8,  padding=0  → H'=8,  n_stages=3, embed_dim divisible by 64
-  Overlapping:      kernel_size=8,  stride=4,  padding=2  → H'=16, n_stages=2, embed_dim divisible by 16
+  Image 64x64
+    Non-overlapping:  kernel_size=8,  stride=8,  padding=0  → H'=8,  n_stages=3, embed_dim div by 64
+    Overlapping:      kernel_size=8,  stride=4,  padding=2  → H'=16, n_stages=2, embed_dim div by 16
+
+  Image 256x256
+    Non-overlapping:  kernel_size=16, stride=16, padding=0  → H'=16, n_stages=4, embed_dim div by 256
+    Overlapping:      kernel_size=16, stride=8,  padding=4  → H'=32, n_stages=3, embed_dim div by 64
 
 
 --------------------------------------------------------------------------------
  LOADING YOUR OWN DATA
 --------------------------------------------------------------------------------
 
-Numpy (.npy) data — simplest option:
+Option A — SAR patch pairs from sar_align (recommended):
+
+  1. Run sar_align/make_dataset.py to produce patches.npy (N, 2, H, W)
+  2. Pass via config:
+       data:
+         patches_path: "path/to/patches.npy"
+         val_frac: 0.15
+         test_frac: 0.15
+  3. Train with:
+       python scripts/train_hybrid_patches.py --patches path/to/patches.npy
+
+Option B — Individual numpy .npy files with atlas:
 
   1. Place .npy files (2D float arrays, shape H×W) into:
        data/train/   data/val/   data/test/
-
-  2. Create a fixed atlas:
+  2. Create atlas:
        import numpy as np
        imgs = [np.load(p) for p in Path("data/train").glob("*.npy")]
        np.save("data/atlas.npy", np.mean(imgs, axis=0))
+  3. Train with:
+       python scripts/train_numpy.py --config configs/experiments/hybrid_ode_numpy.yaml
 
-  3. Set in config:
-       data:
-         root: "data"
-         format: "numpy"
-         image_size: [H, W]    # must match your actual image size
+Option C — NIfTI / medical images (.nii.gz):
 
-NIfTI / medical images (.nii.gz):
-
-  1. Place files as:
-       data/train/subject_001/image.nii.gz
-       data/train/subject_001/seg.nii.gz     (optional, for Dice metric)
-       data/atlas.nii.gz
-
-  2. Remove "format: numpy" from the config (or set format: "nifti").
-     Use scripts/train.py instead of scripts/train_numpy.py.
+  Place files as data/train/subject_001/image.nii.gz (+ optional seg.nii.gz)
+  and data/atlas.nii.gz. Use scripts/train.py.
 
 Custom format:
-  Subclass BaseRegistrationDataset in src/data/ following the pattern in
-  numpy_dataset.py. Return a dict with at minimum "moving" and "fixed" tensors
-  of shape (1, H, W).
+  Subclass BaseRegistrationDataset, return dict with "moving" and "fixed"
+  tensors of shape (1, H, W).
 
 
 --------------------------------------------------------------------------------
  TRAINING
 --------------------------------------------------------------------------------
 
-# Numpy data
+# SAR patch pairs (new — recommended for sar_align output)
+python scripts/train_hybrid_patches.py
+python scripts/train_hybrid_patches.py --patches path/to/patches.npy
+python scripts/train_hybrid_patches.py --reg-weight 0.05 --no-erasing
+python scripts/train_hybrid_patches.py --epochs 50 --batch-size 16
+
+# Numpy atlas data
 python scripts/train_numpy.py --config configs/experiments/hybrid_ode_numpy.yaml
 
 # NIfTI / medical data
@@ -131,6 +179,29 @@ python scripts/train_numpy.py --config configs/experiments/hybrid_ode_numpy.yaml
 # Quick experiment without editing config
 python scripts/train_numpy.py --config configs/experiments/hybrid_ode_numpy.yaml \
     experiment.name=test_run training.epochs=10
+
+
+--------------------------------------------------------------------------------
+ AUGMENTATION (patch-pair training only)
+--------------------------------------------------------------------------------
+
+Transforms are applied ONLY to training data. Val and test are always clean.
+
+  RandomRotation90
+    - Rotates both images by the same 0/90/180/270 degrees
+    - Preserves the registration relationship between moving and fixed
+    - No void corners — square patches remain fully valid after rotation
+
+  SARAwareRandomErasing
+    - Erases a random rectangle INDEPENDENTLY in each image
+    - Fill values drawn from N(patch_mean, patch_std) of nonzero pixels
+      so the fill is statistically consistent with the surrounding SAR content
+    - erasing_scale upper bound of 0.2 erases up to 20% of patch area
+
+Train loss will be higher than val loss — this is EXPECTED because:
+  1. Augmentation makes training patches harder (erasing degrades NCC)
+  2. Dropout is active during training but disabled during eval
+Watch val loss trajectory, not the train/val gap.
 
 
 --------------------------------------------------------------------------------
@@ -149,44 +220,26 @@ Outputs (in results/<experiment_name>/):
 
 
 --------------------------------------------------------------------------------
- VISUALIZE REGISTRATION RESULTS
---------------------------------------------------------------------------------
-
-python scripts/visualize_results.py \
-    --checkpoint results/hybrid_ode_numpy/checkpoints/best.pt \
-    --split val \
-    --n 10
-
-Saves to results/<experiment_name>/figures/val/:
-  sample_000_registration.png    Moving | Fixed | Warped | |Warped-Fixed|
-  sample_000_trajectory.png      time evolution f(r,t) from t=0 to t=1
-
-
---------------------------------------------------------------------------------
  TENSORBOARD
 --------------------------------------------------------------------------------
 
-Launch:
-  python -m tensorboard.main --logdir results/
-
-Then open http://localhost:6006 in your browser.
+python -m tensorboard.main --logdir results/
 
 Tabs:
-  SCALARS    training/validation loss curves, learning rate
+  SCALARS    loss curves (total / similarity / regularization), learning rate
   HPARAMS    compare hyperparameters vs best_val_loss across runs
-             (populated after training completes)
 
 Tips:
-  - All experiments under results/ appear simultaneously — toggle in left panel
-  - Use the Smoothing slider to reduce noise on loss curves
-  - Run multiple experiments with different names to populate the HPARAMS tab
+  - All experiments under results/ appear simultaneously
+  - Use the Smoothing slider to reduce noise
+  - Run multiple experiments with different names to populate HPARAMS
 
 
 --------------------------------------------------------------------------------
  ABLATION STUDY
 --------------------------------------------------------------------------------
 
-1. Create an ablation config (see configs/experiments/ablation_features.yaml):
+1. Create an ablation config:
      ablation:
        param: "model.embed_dim"
        values: [64, 128, 256, 512]
@@ -203,7 +256,11 @@ Outputs a comparison CSV and figure in results/<experiment_name>/.
 
 1. Create src/models/my_model.py
    - Subclass BaseRegistrationModel
-   - Implement forward(moving, fixed) → {"warped": ..., "flow": ...}
+   - Implement forward(moving, fixed) → dict containing at minimum:
+       "warped"  (B, 1, H, W)   registered image
+       "phi"     (B, 2, H, W)   deformation field in [-1,1] normalized coords
+                                (required for deformation_gradient regularization
+                                 and for RegistrationLoss to work correctly)
    - Implement get_config() → dict of constructor kwargs
 
 2. Register in src/models/__init__.py:
@@ -212,7 +269,7 @@ Outputs a comparison CSV and figure in results/<experiment_name>/.
 
 3. Create configs/experiments/my_model.yaml with model.name: "MyModel"
 
-4. Train with scripts/train_numpy.py or scripts/train.py
+4. Train with the appropriate script
 
 
 ================================================================================
