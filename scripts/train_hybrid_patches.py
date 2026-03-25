@@ -6,10 +6,18 @@ specified in cfg["data"]["patches_path"], so this script is immediately
 runnable as a test case without any real data.
 
 Usage:
+    # No config — use built-in defaults (good for quick tests)
     python scripts/train_hybrid_patches.py
     python scripts/train_hybrid_patches.py --patches path/to/patches.npy
-    python scripts/train_hybrid_patches.py --no-erasing
-    python scripts/train_hybrid_patches.py --reg-weight 0.5 --epochs 20
+
+    # With a YAML config (recommended for real training)
+    python scripts/train_hybrid_patches.py --config configs/experiments/hybrid_ode_sar.yaml
+    python scripts/train_hybrid_patches.py --config configs/experiments/hybrid_ode_sar.yaml \
+        --patches dataset/patches.npy
+
+    # CLI flags always override the config
+    python scripts/train_hybrid_patches.py --config configs/experiments/hybrid_ode_sar.yaml \
+        --reg-weight 0.05 --epochs 50
 """
 
 import argparse
@@ -143,29 +151,53 @@ def build_cfg(args) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument("--patches",    default="data/patches/patches.npy",
-                        help="Path to patches.npy — generated if absent")
-    parser.add_argument("--reg-weight", type=float, default=0.1,
-                        help="Deformation gradient regularization weight")
-    parser.add_argument("--epochs",     type=int,   default=10)
-    parser.add_argument("--batch-size", type=int,   default=8)
-    parser.add_argument("--patience",   type=int,   default=5,
-                        help="Early stopping patience (0 = disabled)")
+    parser.add_argument("--config",     default=None,
+                        help="Path to a YAML config file. If omitted, built-in defaults are used.")
+    parser.add_argument("--patches",    default=None,
+                        help="Path to patches.npy — overrides config. Generated if absent.")
+    parser.add_argument("--reg-weight", type=float, default=None,
+                        help="Deformation gradient regularization weight — overrides config.")
+    parser.add_argument("--epochs",     type=int,   default=None,
+                        help="Number of training epochs — overrides config.")
+    parser.add_argument("--batch-size", type=int,   default=None,
+                        help="Batch size — overrides config.")
+    parser.add_argument("--patience",   type=int,   default=None,
+                        help="Early stopping patience (0 = disabled) — overrides config.")
     parser.add_argument("--no-erasing", action="store_true",
-                        help="Disable SAR-aware random erasing augmentation")
+                        help="Disable SAR-aware random erasing — overrides config.")
     args = parser.parse_args()
 
+    # Load config: YAML if provided, otherwise built-in defaults
+    if args.config is not None:
+        with open(args.config) as f:
+            cfg = yaml.safe_load(f)
+    else:
+        cfg = build_cfg(args)
+
+    # CLI flags override config values when explicitly provided
+    if args.patches    is not None:
+        cfg["data"]["patches_path"] = args.patches
+    if args.reg_weight is not None:
+        cfg["loss"]["regularization_weight"] = args.reg_weight
+    if args.epochs     is not None:
+        cfg["training"]["epochs"] = args.epochs
+    if args.batch_size is not None:
+        cfg["training"]["batch_size"] = args.batch_size
+    if args.patience   is not None:
+        cfg["training"]["early_stopping_patience"] = args.patience
+    if args.no_erasing:
+        cfg["augmentation"]["use_erasing"] = False
+
     # Generate dummy data if needed
-    patches_path = Path(args.patches)
+    patches_path = Path(cfg["data"]["patches_path"])
     if not patches_path.exists():
         generate_dummy_patches(patches_path)
 
-    # Infer patch size from the file
+    # Infer patch size from the file — always overrides whatever is in config
     patches    = np.load(patches_path, mmap_mode="r")
     patch_size = patches.shape[-1]
     print(f"Patches: {patches.shape}  patch_size={patch_size}")
 
-    cfg = build_cfg(args)
     cfg["model"]["image_size"] = (patch_size, patch_size)
 
     set_seed(cfg["experiment"]["seed"])

@@ -1,0 +1,128 @@
+# =============================================================================
+# HybridODERegistration — SAR patch-pair training config
+#
+# Usage:
+#   python scripts/train_hybrid_patches.py --config configs/experiments/hybrid_ode_sar.yaml
+#
+# CLI flags always override values here, e.g.:
+#   python scripts/train_hybrid_patches.py \
+#       --config configs/experiments/hybrid_ode_sar.yaml \
+#       --patches dataset/patches.npy \
+#       --reg-weight 0.05 \
+#       --epochs 100
+#
+# Note: image_size is always inferred from the patches file at runtime and
+# does not need to be set here.
+# =============================================================================
+
+experiment:
+  name: hybrid_ode_sar        # change for each experiment (used as output subdir)
+  seed: 42
+  output_dir: outputs
+
+data:
+  patches_path: dataset/patches.npy   # path to (N, 2, H, W) float32 patches file
+  val_frac:  0.15
+  test_frac: 0.15
+  seed: 42
+  num_workers: 0   # increase if I/O is a bottleneck (0 = main process only)
+
+# ---------------------------------------------------------------------------
+# Model — HybridODERegistration
+#
+# Spatial resolution rules:
+#   H' = floor((image_size + 2*padding - kernel_size) / stride) + 1
+#   (image_size / H') must be a power of 2
+#   embed_dim must be divisible by 4^n_stages, where n_stages = log2(image_size/H')
+#
+# Common valid configurations:
+#
+#   Patch 64x64
+#     kernel_size=8,  stride=8,  padding=0  → H'=8,  n_stages=3, embed_dim div 64
+#     kernel_size=8,  stride=4,  padding=2  → H'=16, n_stages=2, embed_dim div 16
+#
+#   Patch 128x128
+#     kernel_size=8,  stride=8,  padding=0  → H'=16, n_stages=3, embed_dim div 64
+#     kernel_size=16, stride=16, padding=0  → H'=8,  n_stages=4, embed_dim div 256
+#
+#   Patch 256x256
+#     kernel_size=16, stride=16, padding=0  → H'=16, n_stages=4, embed_dim div 256
+#     kernel_size=16, stride=8,  padding=4  → H'=32, n_stages=3, embed_dim div 64
+# ---------------------------------------------------------------------------
+model:
+  name: HybridODERegistration
+  # image_size is set automatically from patches shape — do not set here
+  in_channels:        1
+  stem_channels:      32      # filter count in the gated correlation stem
+  kernel_size:        8       # stem conv kernel (see spatial resolution rules above)
+  stride:             8       # stem conv stride
+  padding:            0       # stem conv padding
+  pool_type:          max     # pairwise pooling in stem: 'max' or 'avg'
+  stem_hidden_dim:    32
+  embed_dim:          64      # transformer token dim; must satisfy divisibility rule
+  num_encoder_layers: 2       # transformer encoder depth
+  num_decoder_layers: 2       # transformer decoder depth
+  nhead:              4       # attention heads (embed_dim must be divisible by nhead)
+  ffn_dim:            256     # feed-forward hidden dim in transformer
+  tgt_mode:           encoder_output
+  dropout:            0.1
+  method:             rk4     # ODE solver: 'rk4' (fast) or 'dopri5' (accurate)
+  n_t:                5       # number of RK4 time steps (ignored for dopri5)
+  adjoint:            false   # true = O(1) memory backprop; false = faster on small images
+
+# ---------------------------------------------------------------------------
+# Loss
+#
+# similarity:
+#   ncc   — local NCC, 9x9 window. Robust to intensity differences. Recommended for SAR.
+#   mse   — mean squared error. Fast but sensitive to intensity scale.
+#   ssim  — structural similarity.
+#
+# regularization:
+#   deformation_gradient — mean squared Frobenius norm of Jacobian of displacement
+#                          in pixel units (dimensionless strain). On the same scale
+#                          as NCC, so regularization_weight=0.1 is a sensible start.
+#                          Applied to the integrated phi field, not instantaneous velocity.
+#   l2      — L2 penalty on spatial gradients of the field (first-order smoothness).
+#   bending — second-order penalty; suppresses non-affine deformations more aggressively.
+#   none    — no regularization.
+# ---------------------------------------------------------------------------
+loss:
+  similarity:            ncc
+  regularization:        deformation_gradient
+  similarity_weight:     1.0
+  regularization_weight: 0.1   # increase for smoother deformations; 0.1 is a good start
+
+# ---------------------------------------------------------------------------
+# Training
+# ---------------------------------------------------------------------------
+training:
+  epochs:                   50
+  batch_size:               16
+  optimizer:                adam
+  lr:                       1.0e-4
+  weight_decay:             1.0e-5
+  lr_scheduler:             cosine   # 'cosine' or 'step' or 'none'
+  lr_min:                   1.0e-6   # cosine annealing floor
+  gradient_clip:            1.0      # max gradient norm (0 = disabled)
+  early_stopping_patience:  10       # epochs without val improvement; 0 = disabled
+  val_every:                1        # validate every N epochs
+
+# ---------------------------------------------------------------------------
+# Augmentation — applied ONLY to training data; val/test are always unmodified
+#
+# RandomRotation90:
+#   Rotates both images by the same random 0/90/180/270 degrees.
+#   Preserves the registration relationship. No void corners on square patches.
+#
+# SARAwareRandomErasing:
+#   Erases a random rectangle independently in each image.
+#   Fill is drawn from N(patch_mean, patch_std) of nonzero pixels — statistically
+#   consistent with surrounding SAR content rather than uniform random noise.
+#   Expected effect: train loss will be higher than val loss. This is normal.
+# ---------------------------------------------------------------------------
+augmentation:
+  use_rotation:  true
+  use_erasing:   true
+  erasing_scale: [0.02, 0.2]   # erase 2%–20% of patch area
+  erasing_ratio: [0.3,  3.0]   # aspect ratio range of erased rectangle
