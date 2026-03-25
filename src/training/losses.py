@@ -151,6 +151,38 @@ class BendingEnergyLoss(torch.nn.Module):
         return loss
 
 
+class DeformationGradientLoss(torch.nn.Module):
+    """
+    Regularization on the integrated deformation field phi (B, 2, H, W).
+
+    Converts the displacement (phi - identity) to pixel units then computes
+    the mean squared Frobenius norm of its Jacobian via forward differences.
+    The result is a dimensionless strain (pixels/pixel) on the same scale
+    as NCC loss for typical image deformations, so reg_weight=1 is a
+    meaningful starting point relative to the similarity term.
+    """
+
+    def forward(self, phi: torch.Tensor) -> torch.Tensor:
+        B, _, H, W = phi.shape
+
+        # Identity grid in normalized [-1, 1] coords
+        xs = torch.linspace(-1, 1, W, device=phi.device, dtype=phi.dtype)
+        ys = torch.linspace(-1, 1, H, device=phi.device, dtype=phi.dtype)
+        grid_y, grid_x = torch.meshgrid(ys, xs, indexing="ij")
+        identity = torch.stack([grid_x, grid_y], dim=0).unsqueeze(0)  # (1, 2, H, W)
+
+        # Displacement in normalized coords → convert to pixel units
+        u_norm = phi - identity
+        scale  = phi.new_tensor([(W - 1) / 2.0, (H - 1) / 2.0]).view(1, 2, 1, 1)
+        u      = u_norm * scale  # (B, 2, H, W) pixels
+
+        # Forward differences: pixel displacement change per one-pixel step
+        du_dx = u[:, :, :, 1:] - u[:, :, :, :-1]   # (B, 2, H, W-1)
+        du_dy = u[:, :, 1:, :] - u[:, :, :-1, :]   # (B, 2, H-1, W)
+
+        return du_dx.pow(2).mean() + du_dy.pow(2).mean()
+
+
 # ---------------------------------------------------------------------------
 # Combined registration loss
 # ---------------------------------------------------------------------------
@@ -167,7 +199,8 @@ class RegistrationLoss(torch.nn.Module):
     """
 
     _SIM = {"ncc": NCC, "mse": MSE, "ssim": SSIM}
-    _REG = {"l2": GradientSmoothnessLoss, "bending": BendingEnergyLoss}
+    _REG = {"l2": GradientSmoothnessLoss, "bending": BendingEnergyLoss,
+            "deformation_gradient": DeformationGradientLoss}
 
     def __init__(
         self,
@@ -191,9 +224,9 @@ class RegistrationLoss(torch.nn.Module):
             self.reg_fn = self._REG[regularization]()
 
     def forward(
-        self, warped: torch.Tensor, fixed: torch.Tensor, flow: torch.Tensor
+        self, warped: torch.Tensor, fixed: torch.Tensor, phi: torch.Tensor
     ) -> dict:
         sim  = self.sim_fn(warped, fixed)
-        reg  = self.reg_fn(flow) if self.reg_fn is not None else torch.zeros(1, device=flow.device)
+        reg  = self.reg_fn(phi) if self.reg_fn is not None else torch.zeros(1, device=phi.device)
         total = self.sim_w * sim + self.reg_w * reg
         return {"total": total, "similarity": sim.detach(), "regularization": reg.detach()}

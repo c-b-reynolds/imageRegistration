@@ -36,7 +36,7 @@ import torch.nn.functional as F
 from torchdiffeq import odeint, odeint_adjoint
 
 from .base import BaseRegistrationModel
-from .neural_ode_registration import TransportODEFunc
+from .neural_ode_registration import _spatial_gradient
 
 
 # ---------------------------------------------------------------------------
@@ -344,6 +344,125 @@ class HybridVelocityNet(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Identity grid and deformation field utilities
+# ---------------------------------------------------------------------------
+
+def _make_identity_grid(
+    B: int, H: int, W: int, device: torch.device, dtype: torch.dtype
+) -> torch.Tensor:
+    """
+    Return the identity deformation field in normalized [-1, 1] coordinates.
+
+    Output shape: (B, 2, H, W)
+      channel 0: x-coordinates (horizontal, left=-1, right=+1)
+      channel 1: y-coordinates (vertical,   top=-1,  bottom=+1)
+    Matches the convention expected by F.grid_sample with align_corners=True.
+    """
+    xs = torch.linspace(-1, 1, W, device=device, dtype=dtype)
+    ys = torch.linspace(-1, 1, H, device=device, dtype=dtype)
+    grid_y, grid_x = torch.meshgrid(ys, xs, indexing="ij")          # (H, W) each
+    identity = torch.stack([grid_x, grid_y], dim=0).unsqueeze(0)    # (1, 2, H, W)
+    return identity.expand(B, -1, -1, -1)
+
+
+def deformation_gradient_loss(phi: torch.Tensor) -> torch.Tensor:
+    """
+    Regularization loss on the final deformation field.
+
+    Computes the mean squared Frobenius norm of the Jacobian of the
+    displacement field u = phi - identity, where displacements are expressed
+    in pixel units. This gives a dimensionless strain (pixels/pixel) that is
+    naturally on the same scale as NCC loss for typical image deformations.
+
+    Specifically:
+        loss = mean( (∂u_x/∂x)² + (∂u_x/∂y)² + (∂u_y/∂x)² + (∂u_y/∂y)² )
+
+    where gradients are forward differences in pixel-index space and u is
+    in pixels (converted from normalized [-1,1] coordinates).
+
+    To include in total loss:
+        loss_total = loss_ncc + reg_factor * deformation_gradient_loss(phi)
+
+    Parameters
+    ----------
+    phi : torch.Tensor  (B, 2, H, W)
+        Final deformation field in normalized [-1, 1] coordinates, as returned
+        in the 'phi' key of HybridODERegistration.forward().
+
+    Returns
+    -------
+    scalar tensor
+    """
+    B, _, H, W = phi.shape
+
+    identity = _make_identity_grid(B, H, W, phi.device, phi.dtype)
+    u_norm = phi - identity  # displacement in normalized [-1, 1] coords
+
+    # Convert to pixel displacement so the gradient is dimensionless strain
+    scale = phi.new_tensor([(W - 1) / 2.0, (H - 1) / 2.0]).view(1, 2, 1, 1)
+    u = u_norm * scale  # (B, 2, H, W) in pixels
+
+    # Forward differences: change in pixel displacement per one-pixel step
+    du_dx = u[:, :, :, 1:] - u[:, :, :, :-1]   # (B, 2, H, W-1)
+    du_dy = u[:, :, 1:, :] - u[:, :, :-1, :]   # (B, 2, H-1, W)
+
+    return du_dx.pow(2).mean() + du_dy.pow(2).mean()
+
+
+# ---------------------------------------------------------------------------
+# Augmented ODE function — integrates image and deformation field jointly
+# ---------------------------------------------------------------------------
+
+class AugmentedTransportODEFunc(nn.Module):
+    """
+    Extends the transport ODE to also integrate the deformation field φ.
+
+    State: (f, phi)
+      f   : (B, 1, H, W)  moving image being advected
+      phi : (B, 2, H, W)  deformation field in normalized [-1, 1] coords
+
+    ODEs:
+      df/dt   = v(f, g) · ∇f          (image transport)
+      dφ/dt   = v(t, φ(r, t))         (Lagrangian tracking)
+
+    The Lagrangian update samples the current velocity field at the deformed
+    positions φ via bilinear interpolation, giving the true continuous flow
+    map rather than a sum-of-velocities approximation.
+
+    Initialize phi as the identity grid before calling odeint.
+    Set ode_func.g = fixed_image before each forward pass.
+    """
+
+    def __init__(self, velocity_net: nn.Module):
+        super().__init__()
+        self.velocity_net = velocity_net
+        self.g:   torch.Tensor = None
+        self.nfe: int = 0
+
+    def forward(
+        self, t: torch.Tensor, state: tuple
+    ) -> tuple:
+        f, phi = state
+        self.nfe += 1
+
+        v = self.velocity_net(f, self.g)             # (B, 2, H, W)
+
+        # --- image transport ---
+        grad_f = _spatial_gradient(f)                # (B, 2, H, W)
+        dfdt   = (v * grad_f).sum(dim=1, keepdim=True)
+
+        # --- deformation field: sample v at current deformed positions ---
+        # F.grid_sample expects grid as (B, H, W, 2)
+        phi_grid  = phi.permute(0, 2, 3, 1)
+        v_at_phi  = F.grid_sample(
+            v, phi_grid, mode="bilinear",
+            padding_mode="border", align_corners=True,
+        )                                            # (B, 2, H, W)
+
+        return dfdt, v_at_phi
+
+
+# ---------------------------------------------------------------------------
 # Full registration model
 # ---------------------------------------------------------------------------
 
@@ -432,24 +551,28 @@ class HybridODERegistration(BaseRegistrationModel):
             tgt_mode=tgt_mode,
             dropout=dropout,
         )
-        self.ode_func = TransportODEFunc(self.velocity_net)
+        self.ode_func = AugmentedTransportODEFunc(self.velocity_net)
         self.register_buffer("t", torch.linspace(0.0, 1.0, n_t))
 
     def forward(
         self, moving: torch.Tensor, fixed: torch.Tensor
     ) -> Dict[str, torch.Tensor]:
+        B, _, H, W = moving.shape
         self.ode_func.g   = fixed
         self.ode_func.nfe = 0
 
+        phi0 = _make_identity_grid(B, H, W, moving.device, moving.dtype)
+
         _integrate = odeint_adjoint if self.adjoint else odeint
-        trajectory = _integrate(
-            self.ode_func, moving, self.t,
+        trajectory, trajectory_phi = _integrate(
+            self.ode_func, (moving, phi0), self.t,
             method=self.method, rtol=self.rtol, atol=self.atol,
         )
 
-        warped = trajectory[-1]
-        flow   = self.velocity_net(moving, fixed)
-        return {"warped": warped, "flow": flow, "trajectory": trajectory}
+        warped    = trajectory[-1]       # (B, 1, H, W)
+        phi_final = trajectory_phi[-1]   # (B, 2, H, W) final deformation field
+        flow      = self.velocity_net(moving, fixed)
+        return {"warped": warped, "flow": flow, "trajectory": trajectory, "phi": phi_final}
 
     def get_config(self) -> Dict[str, Any]:
         return {
