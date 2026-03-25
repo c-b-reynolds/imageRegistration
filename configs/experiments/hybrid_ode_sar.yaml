@@ -92,6 +92,9 @@ loss:
   regularization:        deformation_gradient
   similarity_weight:     1.0
   regularization_weight: 0.1   # increase for smoother deformations; 0.1 is a good start
+  ncc_win:               21    # SAR speckle requires a larger window to average out noise;
+                               # 9 is too small (speckle decorrelates NCC toward 0),
+                               # 21 is a reasonable starting point for typical SAR patch sizes
 
 # ---------------------------------------------------------------------------
 # Training

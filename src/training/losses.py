@@ -208,12 +208,13 @@ class RegistrationLoss(torch.nn.Module):
         regularization: str = "bending",
         similarity_weight: float = 1.0,
         regularization_weight: float = 0.01,
+        ncc_win: int = 9,
     ):
         super().__init__()
         if similarity not in self._SIM:
             raise ValueError(f"Unknown similarity '{similarity}'. Choose from {list(self._SIM)}")
 
-        self.sim_fn = self._SIM[similarity]()
+        self.sim_fn = NCC(win=ncc_win) if similarity == "ncc" else self._SIM[similarity]()
         self.sim_w = similarity_weight
 
         self.reg_fn = None
