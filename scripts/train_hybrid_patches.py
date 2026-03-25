@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
 import torch
+import yaml
 
 from src.data.patch_dataset import build_patch_dataloaders
 from src.models import build_model
@@ -174,6 +175,7 @@ def main():
     # Output directory
     out_dir = Path(cfg["experiment"]["output_dir"]) / cfg["experiment"]["name"]
     out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "config.yaml").write_text(yaml.dump(cfg, default_flow_style=False))
 
     # Data
     train_loader, val_loader, _ = build_patch_dataloaders(cfg)
