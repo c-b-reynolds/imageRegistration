@@ -22,6 +22,9 @@ matplotlib>=3.7.0
 seaborn>=0.13.0
 pandas>=2.0.0
 
+# Neural ODE integration
+torchdiffeq>=0.2.3
+
 # Progress & utilities
 tqdm>=4.66.0
 

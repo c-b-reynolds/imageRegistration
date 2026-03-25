@@ -1,0 +1,80 @@
+# Hybrid Neural ODE registration: GatedCorrelationStem + Transformer + HaarDecoder
+# Run: python scripts/train_numpy.py --config configs/experiments/hybrid_ode_numpy.yaml
+#
+# Spatial resolution constraints for 64x64 images:
+#   Non-overlapping:  kernel_size=8, stride=8,  padding=0  → H'=8, n_stages=3
+#   Overlapping:      kernel_size=8, stride=4,  padding=2  → H'=16, n_stages=2
+#
+# embed_dim must be divisible by 4^n_stages:
+#   n_stages=3 → divisible by 64  (e.g. 64, 128, 256)
+#   n_stages=2 → divisible by 16  (e.g. 64, 128, 256)
+
+experiment:
+  name: "hybrid_ode_numpy"
+  seed: 42
+  output_dir: "results"
+  tags: ["hybrid", "neural-ode", "transformer"]
+
+data:
+  root: "data"
+  format: "numpy"
+  image_size: [64, 64]
+  num_pairs: 200
+  num_workers: 0
+
+model:
+  name: "HybridODERegistration"
+  in_channels: 1
+
+  # Stem
+  stem_channels: 512       # filters in conv_f / conv_g (must be even)
+  kernel_size: 8          # large spatial filter
+  stride: 8               # = kernel_size → non-overlapping patches
+  padding: 0              # overlapping: set stride=4, padding=2
+  pool_type: "max"        # 'max' or 'avg' for pairwise channel pooling
+  stem_hidden_dim: 512     # channels after 1x1 conv + sigmoid
+
+  # Transformer
+  embed_dim: 256          # must be divisible by 4^n_stages (64 for n_stages=3)
+  num_encoder_layers: 1
+  num_decoder_layers: 1
+  nhead: 4
+  ffn_dim: null           # transformer feedforward dim (null = embed_dim * 4)
+  tgt_mode: "encoder_output"   # 'encoder_output' (A) or 'learned' (B)
+  dropout: 0.1
+
+  # ODE
+  method: "rk4"
+  n_t: 10
+  rtol: 1.0e-3
+  atol: 1.0e-4
+  adjoint: true
+
+loss:
+  similarity: "ncc"
+  similarity_weight: 1.0
+  regularization: "l2"
+  regularization_weight: 0.01
+
+training:
+  epochs: 50
+  batch_size: 4
+  optimizer: "adam"
+  lr: 1.0e-4
+  weight_decay: 1.0e-5
+  lr_scheduler: "cosine"
+  lr_min: 1.0e-6
+  gradient_clip: 1.0
+  early_stopping_patience: 10
+  val_every: 1
+
+evaluation:
+  metrics:
+    - ncc
+    - ssim
+    - jacobian_det
+  bootstrap_n: 200
+  significance_alpha: 0.05
+
+logging:
+  backend: "tensorboard"

@@ -1,0 +1,55 @@
+# Neural ODE registration via transport equation: df/dt = v(f,g) · ∇f
+# Run: python scripts/train_numpy.py --config configs/experiments/neural_ode_numpy.yaml
+
+experiment:
+  name: "neural_ode_numpy"
+  seed: 42
+  output_dir: "results"
+  tags: ["neural-ode"]
+
+data:
+  root: "data"
+  format: "numpy"
+  image_size: [64, 64]
+  num_pairs: 200
+  num_workers: 0
+
+model:
+  name: "NeuralODERegistration"
+  in_channels: 1
+  features: 32
+  depth: 4
+  method: "rk4"     # rk4 (fast, fixed-step) or dopri5 (adaptive, more accurate)
+  n_t: 10            # number of time steps from t=0 to t=1
+  rtol: 1.0e-3       # tolerance for dopri5 (ignored by rk4)
+  atol: 1.0e-4
+  adjoint: false     # true = O(1) memory backprop; false = autograd through solver
+
+loss:
+  similarity: "ncc"
+  similarity_weight: 1.0
+  regularization: "l2"
+  regularization_weight: 0.01
+
+training:
+  epochs: 50
+  batch_size: 4
+  optimizer: "adam"
+  lr: 1.0e-4
+  weight_decay: 0.0
+  lr_scheduler: "cosine"
+  lr_min: 1.0e-6
+  gradient_clip: 1.0
+  early_stopping_patience: 10
+  val_every: 1
+
+evaluation:
+  metrics:
+    - ncc
+    - ssim
+    - jacobian_det
+  bootstrap_n: 200
+  significance_alpha: 0.05
+
+logging:
+  backend: "tensorboard"

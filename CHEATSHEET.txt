@@ -1,0 +1,218 @@
+================================================================================
+ IMAGE REGISTRATION — QUICK REFERENCE
+================================================================================
+
+SETUP (first time only)
+------------------------
+pip install -r requirements.txt
+python scripts/generate_dummy_data.py      # creates data/ with dummy .npy files
+
+
+--------------------------------------------------------------------------------
+ AVAILABLE MODELS
+--------------------------------------------------------------------------------
+
+  SimpleCNN              Minimal CNN, fast, good baseline
+  NeuralODERegistration  Transport ODE with CNN velocity network
+  HybridODERegistration  Transport ODE with Gated Stem + Transformer velocity net
+  UNetRegistration       Full UNet encoder-decoder (3D capable)
+
+Each model has a matching config in configs/experiments/.
+
+
+--------------------------------------------------------------------------------
+ HYPERPARAMETERS
+--------------------------------------------------------------------------------
+
+All hyperparameters live in the experiment config YAML.
+Example: configs/experiments/hybrid_ode_numpy.yaml
+
+Key sections:
+
+  model:
+    name:              which architecture to use (see AVAILABLE MODELS above)
+    stem_channels:     filter count in the gated stem (HybridODE only)
+    embed_dim:         transformer token dimension (must satisfy divisibility rule)
+    num_encoder_layers / num_decoder_layers / nhead: transformer depth & width
+    method:            ODE solver — "rk4" (fast) or "dopri5" (accurate)
+    n_t:               number of time steps for rk4
+    adjoint:           true = O(1) memory backprop, false = faster on small images
+
+  loss:
+    similarity:        "ncc" | "mse" | "ssim"
+    regularization:    "l2" | "bending" | "none"
+    regularization_weight: tune this if deformations look too smooth or too wild
+
+  training:
+    epochs / batch_size / lr / lr_scheduler / early_stopping_patience
+
+To change a hyperparameter, either:
+
+  Option A — edit the YAML directly, then train as normal.
+
+  Option B — CLI override (no file edit needed):
+    python scripts/train_numpy.py \
+        --config configs/experiments/hybrid_ode_numpy.yaml \
+        model.embed_dim=512 \
+        training.lr=5e-4 \
+        experiment.name=my_new_run
+
+  Always set a unique experiment.name when sweeping — each name gets its own
+  folder under results/ so runs never overwrite each other.
+
+
+--------------------------------------------------------------------------------
+ SPATIAL RESOLUTION RULES (HybridODERegistration only)
+--------------------------------------------------------------------------------
+
+The number of Haar decoder stages is computed automatically from:
+    n_stages = log2(image_size / H')
+where H' = floor((image_size - kernel_size) / stride) + 1
+
+The downsampling ratio (image_size / H') MUST be a power of 2.
+embed_dim MUST be divisible by 4^n_stages.
+
+Common valid settings for 64x64 images:
+
+  Non-overlapping:  kernel_size=8,  stride=8,  padding=0  → H'=8,  n_stages=3, embed_dim divisible by 64
+  Overlapping:      kernel_size=8,  stride=4,  padding=2  → H'=16, n_stages=2, embed_dim divisible by 16
+
+
+--------------------------------------------------------------------------------
+ LOADING YOUR OWN DATA
+--------------------------------------------------------------------------------
+
+Numpy (.npy) data — simplest option:
+
+  1. Place .npy files (2D float arrays, shape H×W) into:
+       data/train/   data/val/   data/test/
+
+  2. Create a fixed atlas:
+       import numpy as np
+       imgs = [np.load(p) for p in Path("data/train").glob("*.npy")]
+       np.save("data/atlas.npy", np.mean(imgs, axis=0))
+
+  3. Set in config:
+       data:
+         root: "data"
+         format: "numpy"
+         image_size: [H, W]    # must match your actual image size
+
+NIfTI / medical images (.nii.gz):
+
+  1. Place files as:
+       data/train/subject_001/image.nii.gz
+       data/train/subject_001/seg.nii.gz     (optional, for Dice metric)
+       data/atlas.nii.gz
+
+  2. Remove "format: numpy" from the config (or set format: "nifti").
+     Use scripts/train.py instead of scripts/train_numpy.py.
+
+Custom format:
+  Subclass BaseRegistrationDataset in src/data/ following the pattern in
+  numpy_dataset.py. Return a dict with at minimum "moving" and "fixed" tensors
+  of shape (1, H, W).
+
+
+--------------------------------------------------------------------------------
+ TRAINING
+--------------------------------------------------------------------------------
+
+# Numpy data
+python scripts/train_numpy.py --config configs/experiments/hybrid_ode_numpy.yaml
+
+# NIfTI / medical data
+python scripts/train.py --config configs/experiments/baseline.yaml
+
+# Resume from checkpoint
+python scripts/train_numpy.py --config configs/experiments/hybrid_ode_numpy.yaml \
+    --resume results/hybrid_ode_numpy/checkpoints/latest.pt
+
+# Quick experiment without editing config
+python scripts/train_numpy.py --config configs/experiments/hybrid_ode_numpy.yaml \
+    experiment.name=test_run training.epochs=10
+
+
+--------------------------------------------------------------------------------
+ EVALUATION
+--------------------------------------------------------------------------------
+
+python scripts/evaluate.py \
+    --checkpoint results/hybrid_ode_numpy/checkpoints/best.pt \
+    --save-figures
+
+Outputs (in results/<experiment_name>/):
+  test_results.csv       per-sample metrics
+  test_summary.csv       mean ± std with bootstrapped 95% CIs
+  table.tex              LaTeX-ready results table
+  figures/               registration result images
+
+
+--------------------------------------------------------------------------------
+ VISUALIZE REGISTRATION RESULTS
+--------------------------------------------------------------------------------
+
+python scripts/visualize_results.py \
+    --checkpoint results/hybrid_ode_numpy/checkpoints/best.pt \
+    --split val \
+    --n 10
+
+Saves to results/<experiment_name>/figures/val/:
+  sample_000_registration.png    Moving | Fixed | Warped | |Warped-Fixed|
+  sample_000_trajectory.png      time evolution f(r,t) from t=0 to t=1
+
+
+--------------------------------------------------------------------------------
+ TENSORBOARD
+--------------------------------------------------------------------------------
+
+Launch:
+  python -m tensorboard.main --logdir results/
+
+Then open http://localhost:6006 in your browser.
+
+Tabs:
+  SCALARS    training/validation loss curves, learning rate
+  HPARAMS    compare hyperparameters vs best_val_loss across runs
+             (populated after training completes)
+
+Tips:
+  - All experiments under results/ appear simultaneously — toggle in left panel
+  - Use the Smoothing slider to reduce noise on loss curves
+  - Run multiple experiments with different names to populate the HPARAMS tab
+
+
+--------------------------------------------------------------------------------
+ ABLATION STUDY
+--------------------------------------------------------------------------------
+
+1. Create an ablation config (see configs/experiments/ablation_features.yaml):
+     ablation:
+       param: "model.embed_dim"
+       values: [64, 128, 256, 512]
+
+2. Run:
+     python scripts/ablation.py --config configs/experiments/ablation_features.yaml
+
+Outputs a comparison CSV and figure in results/<experiment_name>/.
+
+
+--------------------------------------------------------------------------------
+ ADDING A NEW ARCHITECTURE
+--------------------------------------------------------------------------------
+
+1. Create src/models/my_model.py
+   - Subclass BaseRegistrationModel
+   - Implement forward(moving, fixed) → {"warped": ..., "flow": ...}
+   - Implement get_config() → dict of constructor kwargs
+
+2. Register in src/models/__init__.py:
+   from .my_model import MyModel
+   REGISTRY["MyModel"] = MyModel
+
+3. Create configs/experiments/my_model.yaml with model.name: "MyModel"
+
+4. Train with scripts/train_numpy.py or scripts/train.py
+
+
+================================================================================

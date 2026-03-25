@@ -1,4 +1,6 @@
 from .base import BaseRegistrationModel
+from .hybrid_ode_registration import HybridODERegistration
+from .neural_ode_registration import NeuralODERegistration
 from .simple_cnn import SimpleCNN
 from .unet_registration import UNetRegistration
 
@@ -6,6 +8,8 @@ from .unet_registration import UNetRegistration
 REGISTRY: dict = {
     "UNetRegistration": UNetRegistration,
     "SimpleCNN": SimpleCNN,
+    "NeuralODERegistration": NeuralODERegistration,
+    "HybridODERegistration": HybridODERegistration,
 }
 
 
@@ -19,4 +23,5 @@ def build_model(name: str, **kwargs) -> BaseRegistrationModel:
     return cls(**filtered)
 
 
-__all__ = ["BaseRegistrationModel", "UNetRegistration", "SimpleCNN", "REGISTRY", "build_model"]
+__all__ = ["BaseRegistrationModel", "UNetRegistration", "SimpleCNN",
+           "NeuralODERegistration", "HybridODERegistration", "REGISTRY", "build_model"]

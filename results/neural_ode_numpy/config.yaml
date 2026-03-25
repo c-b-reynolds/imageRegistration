@@ -1,0 +1,58 @@
+data:
+  augmentation: true
+  format: numpy
+  image_size:
+  - 64
+  - 64
+  num_pairs: 200
+  num_workers: 0
+  pin_memory: true
+  root: data
+  test_split: 0.15
+  train_split: 0.7
+  val_split: 0.15
+evaluation:
+  bootstrap_n: 200
+  metrics:
+  - ncc
+  - ssim
+  - jacobian_det
+  significance_alpha: 0.05
+experiment:
+  name: neural_ode_numpy
+  output_dir: results
+  seed: 42
+  tags:
+  - neural-ode
+logging:
+  backend: tensorboard
+  wandb_entity: ''
+  wandb_project: image-registration
+loss:
+  regularization: l2
+  regularization_weight: 0.01
+  similarity: ncc
+  similarity_weight: 1.0
+model:
+  atol: 0.0001
+  base_features: 16
+  depth: 4
+  features: 32
+  in_channels: 1
+  int_steps: 7
+  method: rk4
+  n_t: 10
+  name: NeuralODERegistration
+  rtol: 0.001
+training:
+  batch_size: 4
+  early_stopping_patience: 10
+  epochs: 50
+  gradient_clip: 1.0
+  log_every: 10
+  lr: 0.0001
+  lr_min: 1.0e-06
+  lr_scheduler: cosine
+  optimizer: adam
+  val_every: 1
+  weight_decay: 0.0
