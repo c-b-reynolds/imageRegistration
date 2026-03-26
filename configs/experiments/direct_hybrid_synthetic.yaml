@@ -1,0 +1,55 @@
+# =============================================================================
+# DirectHybridRegistration — synthetic shape patch pairs
+# =============================================================================
+
+experiment:
+  name: direct_hybrid_synthetic
+  seed: 42
+  output_dir: outputs
+
+data:
+  patches_path: dataset/synthetic_patches.npy
+  val_frac:  0.15
+  test_frac: 0.15
+  seed: 42
+  num_workers: 0
+
+model:
+  name: DirectHybridRegistration
+  in_channels:        1
+  stem_channels:      32
+  kernel_size:        8
+  stride:             8
+  padding:            0
+  pool_type:          max
+  stem_hidden_dim:    32
+  embed_dim:          64
+  num_encoder_layers: 2
+  num_decoder_layers: 2
+  nhead:              4
+  ffn_dim:            256
+  tgt_mode:           encoder_output
+  dropout:            0.1
+
+loss:
+  similarity:            ncc
+  regularization:        deformation_gradient
+  similarity_weight:     1.0
+  regularization_weight: 0.1
+  ncc_win:               9    # shapes have strong local variance — 9 is fine here
+
+training:
+  epochs:                   100
+  batch_size:               16
+  optimizer:                adam
+  lr:                       1.0e-4
+  weight_decay:             1.0e-5
+  lr_scheduler:             cosine
+  lr_min:                   1.0e-6
+  gradient_clip:            1.0
+  early_stopping_patience:  15
+  val_every:                1
+
+augmentation:
+  use_rotation:  false
+  use_erasing:   false
