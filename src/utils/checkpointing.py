@@ -66,7 +66,9 @@ class CheckpointManager:
             "model_config": getattr(model, "get_config", lambda: {})(),
             "arch": model.__class__.__name__,
         }
-        torch.save(payload, path)
+        # Remove existing file first — avoids Windows rename-over-existing-file failure
+        path.unlink(missing_ok=True)
+        torch.save(payload, str(path))
 
     @staticmethod
     def load(
