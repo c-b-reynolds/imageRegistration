@@ -2,10 +2,10 @@
 Evaluate a trained model on the test set and generate paper-ready outputs.
 
 Usage:
-    python scripts/evaluate.py --checkpoint results/baseline_unet_ncc/checkpoints/best.pt
+    python scripts/evaluate.py --checkpoint outputs/neural_ode_synthetic/checkpoints/best.pt
     python scripts/evaluate.py --checkpoint <path> --split test --save-figures
 
-Outputs (in checkpoint directory):
+Outputs (in checkpoint's parent directory):
     test_results.csv       - per-sample metrics
     test_summary.csv       - mean ± std / CI table (paste into LaTeX)
     figures/               - registration result images, Jacobian distributions
@@ -20,10 +20,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pandas as pd
 import torch
 import yaml
-from omegaconf import OmegaConf
 from tqdm import tqdm
 
-from src.data import build_dataloaders
+from src.data import build_patch_dataloaders
 from src.evaluation import evaluate_dataset, evaluate_sample
 from src.models import build_model
 from src.utils import (
@@ -56,7 +55,8 @@ def main():
 
     # Load config saved alongside the checkpoint
     cfg_path = ckpt.parent.parent / "config.yaml"
-    cfg = OmegaConf.to_container(OmegaConf.load(cfg_path), resolve=True)
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f)
     set_seed(cfg["experiment"]["seed"])
 
     # Load model
@@ -67,19 +67,15 @@ def main():
     model.eval()
     print(f"Loaded: {payload['arch']}  (epoch {payload['epoch']}, val_loss={payload['loss']:.4f})")
 
-    # Data — detect format from config or by checking what files exist on disk
-    root = cfg["data"]["root"]
-    use_numpy = (
-        cfg["data"].get("format") == "numpy"
-        or Path(f"{root}/atlas.npy").exists()
-    )
-    if use_numpy:
-        from src.data.numpy_dataset import build_numpy_dataloaders
-        _, val_loader, test_loader = build_numpy_dataloaders(cfg)
-    else:
-        _, val_loader, test_loader = build_dataloaders(cfg)
+    # Data
+    _, val_loader, test_loader = build_patch_dataloaders(cfg)
     loader = test_loader if args.split == "test" else val_loader
-    requested_metrics = cfg["evaluation"]["metrics"]
+
+    # Evaluation config with defaults
+    evaluation     = cfg.get("evaluation", {})
+    req_metrics    = evaluation.get("metrics", ["ncc", "ssim", "jacobian_det"])
+    bootstrap_n    = evaluation.get("bootstrap_n", 1000)
+    significance_a = evaluation.get("significance_alpha", 0.05)
 
     # Evaluate
     all_results = []
@@ -96,7 +92,7 @@ def main():
 
         warped_np = out["warped"][0, 0].cpu().numpy()
         fixed_np  = fixed[0, 0].cpu().numpy()
-        flow_np   = out["flow"][0].cpu().numpy()
+        flow_np   = out.get("flow", out.get("phi"))[0].cpu().numpy()
 
         result = evaluate_sample(
             warped=warped_np,
@@ -104,12 +100,11 @@ def main():
             flow=flow_np,
             warped_seg=batch.get("moving_seg", [None])[0],
             fixed_seg=batch.get("fixed_seg",  [None])[0],
-            metrics=requested_metrics,
+            metrics=req_metrics,
         )
         all_results.append(result)
         jac_dets.append(flow_np)
 
-        # Save figure for first N samples
         if args.save_figures and i < args.n_figures:
             fig, _ = plot_registration_result(
                 batch["moving"][0, 0].numpy(), fixed_np, warped_np
@@ -121,8 +116,8 @@ def main():
     # Summary table
     summary_df = evaluate_dataset(
         all_results,
-        bootstrap_n=cfg["evaluation"].get("bootstrap_n", 1000),
-        alpha=cfg["evaluation"].get("significance_alpha", 0.05),
+        bootstrap_n=bootstrap_n,
+        alpha=significance_a,
     )
     results_dir = ckpt.parent.parent
     summary_df.to_csv(results_dir / "test_summary.csv")
@@ -134,7 +129,6 @@ def main():
     print(summary_df.to_string(float_format=lambda x: f"{x:.4f}"))
     print(f"\nSaved to: {results_dir}")
 
-    # Jacobian figure
     if args.save_figures:
         import numpy as np
         fig, _ = plot_jacobian_distribution([np.stack(jac_dets)])
@@ -142,7 +136,6 @@ def main():
         import matplotlib.pyplot as plt
         plt.close(fig)
 
-    # LaTeX table snippet
     latex = summary_df[["mean", "std", "ci_lo", "ci_hi"]].to_latex(
         float_format=lambda x: f"{x:.4f}", caption="Test set evaluation metrics.",
         label="tab:results"

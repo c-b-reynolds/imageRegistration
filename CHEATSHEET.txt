@@ -6,202 +6,162 @@ SETUP (first time only)
 ------------------------
 pip install -r requirements.txt
 
-# For numpy/atlas-based dummy data:
-python scripts/generate_dummy_data.py
-
-# For SAR patch-pair dummy data:
-python scripts/train_hybrid_patches.py      # auto-generates patches if absent
+# Generate synthetic patches for testing:
+python scripts/generate_synthetic_patches.py
 
 
 --------------------------------------------------------------------------------
  AVAILABLE MODELS
 --------------------------------------------------------------------------------
 
-  SimpleCNN              Minimal CNN, fast, good baseline
-  NeuralODERegistration  Transport ODE with CNN velocity network
-  HybridODERegistration  Transport ODE with Gated Stem + Transformer velocity net
-                         Also integrates the full deformation field phi jointly.
-  UNetRegistration       Full UNet encoder-decoder (3D capable)
+  GateFlow                   Iterative Lagrangian registration with gated CNN
+                             stem + PE residual.  RECOMMENDED.
+  SimpleCNN                  Minimal CNN baseline
+  NeuralODERegistration      Transport ODE with CNN velocity network
+  HybridODERegistration      Transport ODE with Gated Stem + Transformer;
+                             integrates full deformation field phi jointly
+  EulerianHybridODERegistration  Eulerian variant of the hybrid ODE
+  DirectHybridRegistration   Direct (non-ODE) hybrid registration
+  UNetRegistration           Full UNet encoder-decoder (3D capable)
 
-All models forward(moving, fixed) → dict.
-HybridODERegistration returns:
-  "warped"     (B, 1, H, W)     registered moving image at t=1
-  "phi"        (B, 2, H, W)     final deformation field in [-1,1] coords
-  "flow"       (B, 2, H, W)     instantaneous velocity at t=0 (diagnostic)
-  "trajectory" (n_t, B, 1, H,W) image states from t=0 to t=1
+All models: forward(moving, fixed) → dict with at minimum "warped" and "phi".
 
-
---------------------------------------------------------------------------------
- HYPERPARAMETERS
---------------------------------------------------------------------------------
-
-All hyperparameters live in the experiment config YAML.
-Example: configs/experiments/hybrid_ode_numpy.yaml
-
-Key sections:
-
-  model:
-    name:              which architecture to use (see AVAILABLE MODELS above)
-    stem_channels:     filter count in the gated stem (HybridODE only)
-    embed_dim:         transformer token dimension (must satisfy divisibility rule)
-    num_encoder_layers / num_decoder_layers / nhead: transformer depth & width
-    method:            ODE solver — "rk4" (fast) or "dopri5" (accurate)
-    n_t:               number of time steps for rk4
-    adjoint:           true = O(1) memory backprop, false = faster on small images
-
-  loss:
-    similarity:            "ncc" | "mse" | "ssim"
-    regularization:        "l2" | "bending" | "deformation_gradient" | "none"
-    regularization_weight: weight on the regularization term
-                           deformation_gradient is on the same scale as NCC,
-                           so regularization_weight=0.1 is a sensible start.
-
-  training:
-    epochs / batch_size / lr / lr_scheduler / early_stopping_patience
-
-  augmentation:            (patch-pair training only)
-    use_rotation:          random 90/180/270 rotation, same for both images
-    use_erasing:           SAR-aware random erasing (independent per image)
-    erasing_scale:         [min, max] fraction of patch area  e.g. [0.02, 0.2]
-    erasing_ratio:         [min, max] aspect ratio            e.g. [0.3, 3.0]
-
-To change a hyperparameter without editing YAML:
-    python scripts/train_numpy.py \
-        --config configs/experiments/hybrid_ode_numpy.yaml \
-        model.embed_dim=512 \
-        training.lr=5e-4 \
-        experiment.name=my_new_run
-
-  Always set a unique experiment.name when sweeping.
-
-
---------------------------------------------------------------------------------
- REGULARIZATION — DEFORMATION GRADIENT
---------------------------------------------------------------------------------
-
-The "deformation_gradient" regularizer penalizes the final integrated
-deformation field phi (not the instantaneous velocity):
-
-    loss_reg = reg_weight * mean( ||J_u||^2_F )
-
-where u = phi - identity is the displacement in pixel units, and J_u is its
-Jacobian computed via forward differences. This gives dimensionless strain
-(pixels/pixel) naturally on the same scale as NCC.
-
-The regularizer is applied to out["phi"] from HybridODERegistration, which is
-the true flow map obtained by integrating phi alongside f in the ODE — not a
-sum-of-velocities approximation.
-
-Use it via:
-    loss:
-      regularization: "deformation_gradient"
-      regularization_weight: 0.1   # increase for smoother deformations
-
-
---------------------------------------------------------------------------------
- SPATIAL RESOLUTION RULES (HybridODERegistration only)
---------------------------------------------------------------------------------
-
-The number of Haar decoder stages is computed automatically from:
-    n_stages = log2(image_size / H')
-where H' = floor((image_size + 2*padding - kernel_size) / stride) + 1
-
-The downsampling ratio (image_size / H') MUST be a power of 2.
-embed_dim MUST be divisible by 4^n_stages.
-
-Common valid settings:
-
-  Image 64x64
-    Non-overlapping:  kernel_size=8,  stride=8,  padding=0  → H'=8,  n_stages=3, embed_dim div by 64
-    Overlapping:      kernel_size=8,  stride=4,  padding=2  → H'=16, n_stages=2, embed_dim div by 16
-
-  Image 256x256
-    Non-overlapping:  kernel_size=16, stride=16, padding=0  → H'=16, n_stages=4, embed_dim div by 256
-    Overlapping:      kernel_size=16, stride=8,  padding=4  → H'=32, n_stages=3, embed_dim div by 64
-
-
---------------------------------------------------------------------------------
- LOADING YOUR OWN DATA
---------------------------------------------------------------------------------
-
-Option A — SAR patch pairs from sar_align (recommended):
-
-  1. Run sar_align/make_dataset.py to produce patches.npy (N, 2, H, W)
-  2. Pass via config:
-       data:
-         patches_path: "path/to/patches.npy"
-         val_frac: 0.15
-         test_frac: 0.15
-  3. Train with:
-       python scripts/train_hybrid_patches.py --patches path/to/patches.npy
-
-Option B — Individual numpy .npy files with atlas:
-
-  1. Place .npy files (2D float arrays, shape H×W) into:
-       data/train/   data/val/   data/test/
-  2. Create atlas:
-       import numpy as np
-       imgs = [np.load(p) for p in Path("data/train").glob("*.npy")]
-       np.save("data/atlas.npy", np.mean(imgs, axis=0))
-  3. Train with:
-       python scripts/train_numpy.py --config configs/experiments/hybrid_ode_numpy.yaml
-
-Option C — NIfTI / medical images (.nii.gz):
-
-  Place files as data/train/subject_001/image.nii.gz (+ optional seg.nii.gz)
-  and data/atlas.nii.gz. Use scripts/train.py.
-
-Custom format:
-  Subclass BaseRegistrationDataset, return dict with "moving" and "fixed"
-  tensors of shape (1, H, W).
+GateFlow output dict:
+  "warped"      (B, 1, H, W)          registered moving image
+  "phi"         (B, 2, H, W)          accumulated displacement in [-1,1] coords
+  "flow"        (B, 2, H, W)          alias for phi
+  "trajectory"  (n_t+1, B, 1, H, W)  intermediate states t=0..t=1
 
 
 --------------------------------------------------------------------------------
  TRAINING
 --------------------------------------------------------------------------------
 
-# SAR patch pairs (new — recommended for sar_align output)
-python scripts/train_hybrid_patches.py
-python scripts/train_hybrid_patches.py --patches path/to/patches.npy
-python scripts/train_hybrid_patches.py --reg-weight 0.05 --no-erasing
-python scripts/train_hybrid_patches.py --epochs 50 --batch-size 16
+All training uses train_image_pairs.py with a YAML config.
 
-# Numpy atlas data
-python scripts/train_numpy.py --config configs/experiments/hybrid_ode_numpy.yaml
+# Basic
+python scripts/train_image_pairs.py \
+    --config configs/experiments/gate_flow_synthetic.yaml
 
-# NIfTI / medical data
-python scripts/train.py --config configs/experiments/baseline.yaml
+# Use a different patches file
+python scripts/train_image_pairs.py \
+    --config configs/experiments/gate_flow_synthetic.yaml \
+    --patches path/to/patches.npy
 
-# Resume from checkpoint
-python scripts/train_numpy.py --config configs/experiments/hybrid_ode_numpy.yaml \
-    --resume results/hybrid_ode_numpy/checkpoints/latest.pt
+# Override training settings
+python scripts/train_image_pairs.py \
+    --config configs/experiments/gate_flow_synthetic.yaml \
+    --epochs 50 --batch-size 32 --reg-weight 0.05
 
-# Quick experiment without editing config
-python scripts/train_numpy.py --config configs/experiments/hybrid_ode_numpy.yaml \
-    experiment.name=test_run training.epochs=10
+# Load weights from a prior checkpoint (optimizer/epoch NOT restored)
+python scripts/train_image_pairs.py \
+    --config configs/experiments/gate_flow_synthetic.yaml \
+    --weights outputs/gate_flow_synthetic/checkpoints/best.pt
+
+# Disable early stopping
+python scripts/train_image_pairs.py \
+    --config configs/experiments/gate_flow_synthetic.yaml \
+    --patience 0
+
+# Disable random erasing augmentation
+python scripts/train_image_pairs.py \
+    --config configs/experiments/gate_flow_synthetic.yaml \
+    --no-erasing
+
+Outputs → outputs/<experiment_name>/
+  config.yaml
+  checkpoints/best.pt
+  checkpoints/latest.pt
 
 
 --------------------------------------------------------------------------------
- AUGMENTATION (patch-pair training only)
+ HYPERPARAMETERS (gate_flow_synthetic.yaml)
 --------------------------------------------------------------------------------
 
-Transforms are applied ONLY to training data. Val and test are always clean.
+model:
+  name: GateFlow
+  in_channels:         1
+  hidden_channels:     256   # C — gate width; more = richer features, slower
+  kernel_size:         8     # k — square stem conv kernel
+  stride:              4     # s — coarse res: H' = H/s
+  bottleneck_channels: 256   # K — tanh bottleneck width
+  n_pe:                256   # PE channels (must be divisible by 4)
+  n_t:                 20    # iterative steps; more = smoother trajectory
 
-  RandomRotation90
-    - Rotates both images by the same 0/90/180/270 degrees
-    - Preserves the registration relationship between moving and fixed
-    - No void corners — square patches remain fully valid after rotation
+loss:
+  similarity:            ncc
+  regularization:        l2
+  similarity_weight:     1.0
+  regularization_weight: 0.1
+  ncc_win:               9
+  jacobian_det_weight:   0.1   # >0 = penalise folds
+  jacobian_eps:          0.001 # use decimal, NOT 1e-3 (YAML parses as string)
+  log_jacobian_weight:   0.1   # >0 = penalise volume change
+  log_jacobian_clamp:    0.00001
 
-  SARAwareRandomErasing
-    - Erases a random rectangle INDEPENDENTLY in each image
-    - Fill values drawn from N(patch_mean, patch_std) of nonzero pixels
-      so the fill is statistically consistent with the surrounding SAR content
-    - erasing_scale upper bound of 0.2 erases up to 20% of patch area
+training:
+  epochs:                   50
+  batch_size:               16
+  optimizer:                adam
+  lr:                       1.0e-4
+  weight_decay:             1.0e-5
+  lr_scheduler:             cosine
+  lr_min:                   1.0e-6
+  gradient_clip:            1.0
+  early_stopping_patience:  15
+  val_every:                1
 
-Train loss will be higher than val loss — this is EXPECTED because:
-  1. Augmentation makes training patches harder (erasing degrades NCC)
-  2. Dropout is active during training but disabled during eval
-Watch val loss trajectory, not the train/val gap.
+augmentation:
+  use_rotation: false
+  use_erasing:  false
+
+
+--------------------------------------------------------------------------------
+ LOSS FUNCTIONS
+--------------------------------------------------------------------------------
+
+Similarity  (loss.similarity):
+  ncc    Local NCC, sliding window.  Robust to intensity differences.  Recommended.
+  mse    Mean squared error.
+  ssim   Structural similarity.
+
+Regularization  (loss.regularization):
+  l2                  L2 penalty on spatial gradients of displacement
+  bending             Bending energy (second-order)
+  deformation_gradient  Mean squared Frobenius norm of displacement Jacobian
+  none                No regularization
+
+Jacobian terms  (optional, set weight > 0 to enable):
+  jacobian_det_weight   Penalises folds: relu(-(det(J)+eps))^2
+  log_jacobian_weight   Penalises volume change: (log det(J))^2
+
+WARNING: Write Jacobian float values as decimals (0.001), not 1e-3.
+         YAML parses scientific notation without quotes as a string.
+
+
+--------------------------------------------------------------------------------
+ VISUALIZATION
+--------------------------------------------------------------------------------
+
+# Registration results (moving / fixed / warped / deformed grid)
+python scripts/visualize_results.py \
+    --checkpoint outputs/gate_flow_synthetic/checkpoints/best.pt \
+    --n-samples 8 \
+    --out figures/results.png
+
+# Saves two files:
+#   figures/results.png        4-column grid (moving, fixed, warped, grid)
+#   figures/results_grid.png   deformed grid only
+
+# GateFlow stem filter visualisation (conv_f / conv_g quads)
+python scripts/visualize_filters.py \
+    --checkpoint outputs/gate_flow_synthetic/checkpoints/best.pt \
+    --n-pairs 25 \
+    --out figures/filters.png
+
+# Display interactively instead of saving
+python scripts/visualize_filters.py \
+    --checkpoint outputs/gate_flow_synthetic/checkpoints/best.pt
 
 
 --------------------------------------------------------------------------------
@@ -209,10 +169,10 @@ Watch val loss trajectory, not the train/val gap.
 --------------------------------------------------------------------------------
 
 python scripts/evaluate.py \
-    --checkpoint results/hybrid_ode_numpy/checkpoints/best.pt \
+    --checkpoint outputs/gate_flow_synthetic/checkpoints/best.pt \
     --save-figures
 
-Outputs (in results/<experiment_name>/):
+Outputs (in outputs/<experiment_name>/):
   test_results.csv       per-sample metrics
   test_summary.csv       mean ± std with bootstrapped 95% CIs
   table.tex              LaTeX-ready results table
@@ -223,31 +183,49 @@ Outputs (in results/<experiment_name>/):
  TENSORBOARD
 --------------------------------------------------------------------------------
 
-python -m tensorboard.main --logdir results/
+python -m tensorboard.main --logdir outputs/
 
 Tabs:
-  SCALARS    loss curves (total / similarity / regularization), learning rate
+  SCALARS    loss curves (total / similarity / regularization /
+             jacobian / log_jacobian), learning rate
   HPARAMS    compare hyperparameters vs best_val_loss across runs
 
 Tips:
-  - All experiments under results/ appear simultaneously
-  - Use the Smoothing slider to reduce noise
-  - Run multiple experiments with different names to populate HPARAMS
+  - All experiments under outputs/ appear simultaneously
+  - Use the Smoothing slider to reduce noise in loss curves
 
 
 --------------------------------------------------------------------------------
  ABLATION STUDY
 --------------------------------------------------------------------------------
 
-1. Create an ablation config:
-     ablation:
-       param: "model.embed_dim"
-       values: [64, 128, 256, 512]
+Add an ablation section to any experiment config:
 
-2. Run:
-     python scripts/ablation.py --config configs/experiments/ablation_features.yaml
+    ablation:
+      param:  model.hidden_channels
+      values: [64, 128, 256, 512]
 
-Outputs a comparison CSV and figure in results/<experiment_name>/.
+Run:
+    python scripts/ablation.py \
+        --config configs/experiments/ablation_features.yaml
+
+Outputs a comparison CSV and figure in outputs/<experiment_name>/.
+
+
+--------------------------------------------------------------------------------
+ DATA
+--------------------------------------------------------------------------------
+
+Input format:  patches.npy   shape (N, 2, H, W)  float32  values in [0, 1]
+               channel 0 = moving image
+               channel 1 = fixed image
+
+Generate synthetic patches:
+    python scripts/generate_synthetic_patches.py
+    # writes dataset/synthetic_patches.npy
+
+Inspect a patches file:
+    python scripts/inspect_patches.py dataset/synthetic_patches.npy
 
 
 --------------------------------------------------------------------------------
@@ -256,20 +234,16 @@ Outputs a comparison CSV and figure in results/<experiment_name>/.
 
 1. Create src/models/my_model.py
    - Subclass BaseRegistrationModel
-   - Implement forward(moving, fixed) → dict containing at minimum:
+   - forward(moving, fixed) → dict with at minimum:
        "warped"  (B, 1, H, W)   registered image
-       "phi"     (B, 2, H, W)   deformation field in [-1,1] normalized coords
-                                (required for deformation_gradient regularization
-                                 and for RegistrationLoss to work correctly)
-   - Implement get_config() → dict of constructor kwargs
+       "phi"     (B, 2, H, W)   deformation field in [-1,1] coords
+   - get_config() → dict of constructor kwargs
 
 2. Register in src/models/__init__.py:
    from .my_model import MyModel
    REGISTRY["MyModel"] = MyModel
 
 3. Create configs/experiments/my_model.yaml with model.name: "MyModel"
-
-4. Train with the appropriate script
 
 
 ================================================================================

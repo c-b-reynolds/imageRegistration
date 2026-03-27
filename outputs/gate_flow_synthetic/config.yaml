@@ -1,0 +1,46 @@
+augmentation:
+  use_erasing: false
+  use_rotation: false
+data:
+  num_workers: 0
+  patches_path: dataset/synthetic_patches.npy
+  seed: 42
+  test_frac: 0.15
+  val_frac: 0.15
+experiment:
+  name: gate_flow_synthetic
+  output_dir: outputs
+  seed: 42
+loss:
+  jacobian_det_weight: 0.1
+  jacobian_eps: 1e-3
+  log_jacobian_clamp: 1e-5
+  log_jacobian_weight: 0.1
+  ncc_win: 9
+  regularization: l2
+  regularization_weight: 0.1
+  similarity: ncc
+  similarity_weight: 1.0
+model:
+  bottleneck_channels: 256
+  hidden_channels: 256
+  image_size:
+  - 64
+  - 64
+  in_channels: 1
+  kernel_size: 8
+  n_pe: 256
+  n_t: 20
+  name: GateFlow
+  stride: 4
+training:
+  batch_size: 16
+  early_stopping_patience: 15
+  epochs: 10
+  gradient_clip: 1.0
+  lr: 0.0001
+  lr_min: 1.0e-06
+  lr_scheduler: cosine
+  optimizer: adam
+  val_every: 1
+  weight_decay: 1.0e-05

@@ -151,6 +151,74 @@ class BendingEnergyLoss(torch.nn.Module):
         return loss
 
 
+def _jacobian_det(phi: torch.Tensor) -> torch.Tensor:
+    """
+    Jacobian determinant of the full deformation F(x) = x + phi(x).
+
+    phi : (B, 2, H, W) displacement in normalised [-1, 1] coords.
+
+    Returns det(J_F) = (1 + d_phi_x/dx)(1 + d_phi_y/dy)
+                     - (d_phi_x/dy)(d_phi_y/dx)   shape (B, 1, H, W).
+
+    Spatial derivatives are computed via central differences with
+    replicate padding so the output has the same spatial size as phi.
+    """
+    px = F.pad(phi, (1, 1, 0, 0), mode="replicate")
+    py = F.pad(phi, (0, 0, 1, 1), mode="replicate")
+
+    dphi_x_dx = (px[:, 0:1, :, 2:] - px[:, 0:1, :, :-2]) / 2.0
+    dphi_y_dx = (px[:, 1:2, :, 2:] - px[:, 1:2, :, :-2]) / 2.0
+    dphi_x_dy = (py[:, 0:1, 2:, :] - py[:, 0:1, :-2, :]) / 2.0
+    dphi_y_dy = (py[:, 1:2, 2:, :] - py[:, 1:2, :-2, :]) / 2.0
+
+    return ((1.0 + dphi_x_dx) * (1.0 + dphi_y_dy)
+            - dphi_x_dy * dphi_y_dx)
+
+
+class NegativeJacobianLoss(torch.nn.Module):
+    """
+    Penalises local folding in the deformation field.
+
+        L = mean( relu( -(det(J_F) + eps) )^2 )
+
+    det(J_F) < 0 means the mapping has folded at that location.
+    The relu^2 is zero where the mapping is well-behaved, concentrating
+    learning on fold removal only.
+    """
+
+    def __init__(self, eps: float = 1e-3):
+        super().__init__()
+        self.eps = eps
+
+    def forward(self, phi: torch.Tensor) -> torch.Tensor:
+        det = _jacobian_det(phi)
+        return F.relu(-(det + self.eps)).pow(2).mean()
+
+
+class LogJacobianLoss(torch.nn.Module):
+    """
+    Log-determinant Jacobian regularization.
+
+        L = mean( (log det(J_F))^2 )
+
+    Penalises any deviation from det = 1 (log = 0), encouraging a
+    volume-preserving (incompressible) transformation.  Used in LDDMM
+    and ANTs for tissues such as brain where volume is approximately
+    conserved.
+
+    det is clamped to clamp_min before taking the log to avoid
+    instability at or below zero (folded regions).
+    """
+
+    def __init__(self, clamp_min: float = 1e-5):
+        super().__init__()
+        self.clamp_min = clamp_min
+
+    def forward(self, phi: torch.Tensor) -> torch.Tensor:
+        det = _jacobian_det(phi)
+        return torch.log(det.clamp(min=self.clamp_min)).pow(2).mean()
+
+
 class DeformationGradientLoss(torch.nn.Module):
     """
     Regularization on the integrated deformation field phi (B, 2, H, W).
@@ -209,25 +277,44 @@ class RegistrationLoss(torch.nn.Module):
         similarity_weight: float = 1.0,
         regularization_weight: float = 0.01,
         ncc_win: int = 9,
+        jacobian_det_weight: float = 0.0,
+        jacobian_eps:        float = 1e-3,
+        log_jacobian_weight: float = 0.0,
+        log_jacobian_clamp:  float = 1e-5,
     ):
         super().__init__()
         if similarity not in self._SIM:
             raise ValueError(f"Unknown similarity '{similarity}'. Choose from {list(self._SIM)}")
 
         self.sim_fn = NCC(win=ncc_win) if similarity == "ncc" else self._SIM[similarity]()
-        self.sim_w = similarity_weight
+        self.sim_w  = similarity_weight
 
         self.reg_fn = None
-        self.reg_w = regularization_weight
+        self.reg_w  = regularization_weight
         if regularization != "none":
             if regularization not in self._REG:
                 raise ValueError(f"Unknown regularization '{regularization}'")
             self.reg_fn = self._REG[regularization]()
 
+        self.jac_fn  = NegativeJacobianLoss(eps=float(jacobian_eps))   if jacobian_det_weight > 0.0 else None
+        self.jac_w   = jacobian_det_weight
+
+        self.logj_fn = LogJacobianLoss(clamp_min=float(log_jacobian_clamp)) if log_jacobian_weight > 0.0 else None
+        self.logj_w  = log_jacobian_weight
+
     def forward(
         self, warped: torch.Tensor, fixed: torch.Tensor, phi: torch.Tensor
     ) -> dict:
         sim  = self.sim_fn(warped, fixed)
-        reg  = self.reg_fn(phi) if self.reg_fn is not None else torch.zeros(1, device=phi.device)
-        total = self.sim_w * sim + self.reg_w * reg
-        return {"total": total, "similarity": sim.detach(), "regularization": reg.detach()}
+        reg  = self.reg_fn(phi)  if self.reg_fn  is not None else phi.new_zeros(1)
+        jac  = self.jac_fn(phi)  if self.jac_fn  is not None else phi.new_zeros(1)
+        logj = self.logj_fn(phi) if self.logj_fn is not None else phi.new_zeros(1)
+
+        total = self.sim_w * sim + self.reg_w * reg + self.jac_w * jac + self.logj_w * logj
+        return {
+            "total":          total,
+            "similarity":     sim.detach(),
+            "regularization": reg.detach(),
+            "jacobian":       jac.detach(),
+            "log_jacobian":   logj.detach(),
+        }

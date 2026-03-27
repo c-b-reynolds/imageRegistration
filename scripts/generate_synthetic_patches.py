@@ -46,10 +46,21 @@ def _draw_ellipse(img, cx, cy, rx, ry, angle, intensity):
     img[mask] = np.maximum(img[mask], intensity)
 
 
-def _draw_rectangle(img, x0, y0, x1, y1, intensity):
-    x0, x1 = max(0, x0), min(img.shape[1], x1)
-    y0, y1 = max(0, y0), min(img.shape[0], y1)
-    img[y0:y1, x0:x1] = np.maximum(img[y0:y1, x0:x1], intensity)
+def _draw_rectangle(img, cx, cy, hw, hh, angle, intensity):
+    """
+    Filled rectangle centred at (cx, cy) with half-widths (hw, hh)
+    rotated by angle (radians).  Uses a half-plane test — no artifacts.
+    """
+    H, W = img.shape
+    y, x = np.mgrid[:H, :W]
+    dx   = x - cx
+    dy   = y - cy
+    cos_a, sin_a = np.cos(angle), np.sin(angle)
+    # Project onto rectangle axes
+    proj_u = np.abs( dx * cos_a + dy * sin_a)
+    proj_v = np.abs(-dx * sin_a + dy * cos_a)
+    mask = (proj_u <= hw) & (proj_v <= hh)
+    img[mask] = np.maximum(img[mask], intensity)
 
 
 def _draw_triangle(img, pts, intensity):
@@ -96,11 +107,12 @@ def make_shape_image(size: int, rng: np.random.Generator) -> np.ndarray:
             _draw_ellipse(img, cx, cy, rx, ry, angle, intensity)
 
         elif kind == "rectangle":
-            x0 = int(rng.integers(0, size - size // 4))
-            y0 = int(rng.integers(0, size - size // 4))
-            x1 = x0 + int(rng.integers(size // 8, size // 3))
-            y1 = y0 + int(rng.integers(size // 8, size // 3))
-            _draw_rectangle(img, x0, y0, x1, y1, intensity)
+            cx    = int(rng.integers(size // 4, 3 * size // 4))
+            cy    = int(rng.integers(size // 4, 3 * size // 4))
+            hw    = int(rng.integers(size // 10, size // 4))
+            hh    = int(rng.integers(size // 10, size // 4))
+            angle = float(rng.uniform(0, np.pi))
+            _draw_rectangle(img, cx, cy, hw, hh, angle, intensity)
 
         elif kind == "triangle":
             pts = [

@@ -28,6 +28,34 @@ from src.models import build_model
 from src.utils import get_device, set_seed
 
 
+def _draw_deformed_grid(ax, dx: np.ndarray, dy: np.ndarray,
+                        step: int = 4, color: str = "#00e5ff",
+                        linewidth: float = 0.7) -> None:
+    """
+    Overlay a deformed regular grid on ax.
+
+    dx, dy : (H, W) displacement fields in pixel units.
+    A grid point at (x, y) is drawn at (x + dx[y, x], y + dy[y, x]).
+    Horizontal and vertical grid lines connect adjacent sampled points.
+    """
+    H, W = dx.shape
+    ys = np.arange(0, H, step)
+    xs = np.arange(0, W, step)
+
+    for y in ys:
+        px = xs + dx[y, xs]
+        py = np.full(len(xs), y, dtype=float) + dy[y, xs]
+        ax.plot(px, py, "-", color=color, linewidth=linewidth)
+
+    for x in xs:
+        px = np.full(len(ys), x, dtype=float) + dx[ys, x]
+        py = ys + dy[ys, x]
+        ax.plot(px, py, "-", color=color, linewidth=linewidth)
+
+    ax.set_xlim(-0.5, W - 0.5)
+    ax.set_ylim(H - 0.5, -0.5)
+
+
 def parse_args():
     p = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument("--checkpoint", required=True,
@@ -103,29 +131,30 @@ def main():
         fig.savefig(out_dir / f"sample_{n_saved:03d}_registration.png", dpi=150, bbox_inches="tight")
         plt.close(fig)
 
-        # --- Deformation / velocity field magnitude ---
+        # --- Deformation / velocity field magnitude + deformed grid ---
         if "phi" in out:
             phi = out["phi"][0].cpu().numpy()  # (2, H, W)  normalized [-1,1] coords
             H, W = phi.shape[1], phi.shape[2]
 
-            is_eulerian = cfg["model"]["name"] == "EulerianHybridODERegistration"
+            _velocity_models = {"EulerianHybridODERegistration", "GateFlow"}
+            is_eulerian = cfg["model"]["name"] in _velocity_models
 
             if is_eulerian:
-                # phi is the instantaneous velocity field — magnitude in pixel units
-                disp_mag = np.sqrt(
-                    (phi[0] * (W - 1) / 2.0) ** 2 +
-                    (phi[1] * (H - 1) / 2.0) ** 2
-                )
+                # phi is the instantaneous velocity field — convert to pixel units directly
+                dx_pix = phi[0] * (W - 1) / 2.0
+                dy_pix = phi[1] * (H - 1) / 2.0
                 field_title = "Velocity magnitude (pixels/unit time)"
             else:
                 # phi is an integrated position field — subtract identity to get displacement
-                dx = phi[0] * (W - 1) / 2.0
-                dy = phi[1] * (H - 1) / 2.0
-                xs = np.linspace(-1, 1, W) * (W - 1) / 2.0
-                ys = np.linspace(-1, 1, H) * (H - 1) / 2.0
-                grid_x, grid_y = np.meshgrid(xs, ys)
-                disp_mag = np.sqrt((dx - grid_x) ** 2 + (dy - grid_y) ** 2)
+                grid_x, grid_y = np.meshgrid(
+                    np.linspace(-1, 1, W) * (W - 1) / 2.0,
+                    np.linspace(-1, 1, H) * (H - 1) / 2.0,
+                )
+                dx_pix = phi[0] * (W - 1) / 2.0 - grid_x
+                dy_pix = phi[1] * (H - 1) / 2.0 - grid_y
                 field_title = "Displacement magnitude (pixels)"
+
+            disp_mag = np.sqrt(dx_pix ** 2 + dy_pix ** 2)
 
             fig, ax = plt.subplots(1, 1, figsize=(4, 4))
             im = ax.imshow(disp_mag, cmap="viridis")
@@ -134,6 +163,17 @@ def main():
             fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
             fig.tight_layout()
             fig.savefig(out_dir / f"sample_{n_saved:03d}_deformation.png", dpi=150, bbox_inches="tight")
+            plt.close(fig)
+
+            # --- Deformed grid overlaid on fixed image ---
+            step = max(H // 16, 2)
+            fig, ax = plt.subplots(figsize=(4, 4))
+            ax.imshow(fixed_np, cmap="gray", vmin=0, vmax=1, alpha=0.6)
+            _draw_deformed_grid(ax, dx_pix, dy_pix, step=step)
+            ax.set_title("Deformed grid", fontsize=10)
+            ax.axis("off")
+            fig.tight_layout()
+            fig.savefig(out_dir / f"sample_{n_saved:03d}_grid.png", dpi=150, bbox_inches="tight")
             plt.close(fig)
 
         # --- Trajectory strip: image evolution t=0 → t=1 ---

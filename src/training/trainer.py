@@ -139,7 +139,7 @@ class Trainer:
 
             self.optimizer.zero_grad(set_to_none=True)
             out    = self.model(moving, fixed)
-            losses = self.loss_fn(out["warped"], fixed, out["phi"])
+            losses = self.loss_fn(out["warped"], fixed, out.get("phi", out["flow"]))
             losses["total"].backward()
 
             grad_clip = self.cfg["training"].get("gradient_clip", 0.0)
@@ -168,7 +168,7 @@ class Trainer:
             fixed  = batch["fixed"].to(self.device, non_blocking=True)
 
             out    = self.model(moving, fixed)
-            losses = self.loss_fn(out["warped"], fixed, out["phi"])
+            losses = self.loss_fn(out["warped"], fixed, out.get("phi", out["flow"]))
             bs = moving.size(0)
             total_loss += losses["total"].item() * bs
             n          += bs

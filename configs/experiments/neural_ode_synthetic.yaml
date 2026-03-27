@@ -1,0 +1,45 @@
+# NeuralODERegistration on synthetic shape patches
+
+experiment:
+  name: neural_ode_synthetic
+  seed: 42
+  output_dir: outputs
+
+data:
+  patches_path: dataset/synthetic_patches.npy
+  val_frac:  0.15
+  test_frac: 0.15
+  seed: 42
+  num_workers: 0
+
+model:
+  name: NeuralODERegistration
+  in_channels: 1
+  features:    32
+  depth:       4
+  method:      rk4
+  n_t:         5
+  adjoint:     false
+
+loss:
+  similarity:            ncc
+  regularization:        l2
+  similarity_weight:     1.0
+  regularization_weight: 0.01
+  ncc_win:               9
+
+training:
+  epochs:                   100
+  batch_size:               16
+  optimizer:                adam
+  lr:                       1.0e-4
+  weight_decay:             1.0e-5
+  lr_scheduler:             cosine
+  lr_min:                   1.0e-6
+  gradient_clip:            1.0
+  early_stopping_patience:  15
+  val_every:                1
+
+augmentation:
+  use_rotation: false
+  use_erasing:  false
