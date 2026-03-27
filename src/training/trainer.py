@@ -160,8 +160,14 @@ class Trainer:
     @torch.inference_mode()
     def _val_epoch(self, loader: DataLoader, epoch: int) -> dict:
         self.model.eval()
-        total_loss = 0.0
+        total_loss = sim_loss = reg_loss = jac_loss = logj_loss = 0.0
         n = 0
+
+        lf = self.loss_fn  # RegistrationLoss
+        sim_w  = getattr(lf, "sim_w",  1.0)
+        reg_w  = getattr(lf, "reg_w",  0.0)
+        jac_w  = getattr(lf, "jac_w",  0.0)
+        logj_w = getattr(lf, "logj_w", 0.0)
 
         for batch in tqdm(loader, desc=f"  Val {epoch}", leave=False, dynamic_ncols=True):
             moving = batch["moving"].to(self.device, non_blocking=True)
@@ -171,13 +177,36 @@ class Trainer:
             losses = self.loss_fn(out["warped"], fixed, out.get("phi", out["flow"]))
             bs = moving.size(0)
             total_loss += losses["total"].item() * bs
+            sim_loss   += losses["similarity"].item()     * sim_w  * bs
+            reg_loss   += losses["regularization"].item() * reg_w  * bs
+            jac_loss   += losses["jacobian"].item()       * jac_w  * bs
+            logj_loss  += losses["log_jacobian"].item()   * logj_w * bs
             n          += bs
 
-        return {"val_loss": total_loss / n, "loss": total_loss / n}
+        return {
+            "val_loss":     total_loss / n,
+            "loss":         total_loss / n,
+            "val_sim":      sim_loss   / n,
+            "val_reg":      reg_loss   / n,
+            "val_jac":      jac_loss   / n,
+            "val_logj":     logj_loss  / n,
+        }
 
     @staticmethod
     def _print_epoch(epoch, total, train, val, elapsed):
-        val_str = f"  val_loss={val.get('loss', float('nan')):.4f}" if val else ""
+        val_str = ""
+        if val:
+            parts = [f"val_loss={val.get('loss', float('nan')):.4f}"]
+            components = [
+                ("sim",  val.get("val_sim",  0.0)),
+                ("reg",  val.get("val_reg",  0.0)),
+                ("jac",  val.get("val_jac",  0.0)),
+                ("logj", val.get("val_logj", 0.0)),
+            ]
+            comp_str = "  ".join(f"{k}={v:.4f}" for k, v in components if v != 0.0)
+            if comp_str:
+                parts.append(f"({comp_str})")
+            val_str = "  " + "  ".join(parts)
         print(f"Epoch {epoch:>4}/{total}  train_loss={train['loss']:.4f}{val_str}  [{elapsed:.1f}s]")
 
 

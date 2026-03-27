@@ -120,11 +120,17 @@ def main():
         output_dir=str(out_dir),
     )
 
-    aug = cfg.get("augmentation", {})
-    print(f"Training for {cfg['training']['epochs']} epochs  "
-          f"| model={cfg['model']['name']}  "
-          f"| reg_weight={cfg['loss']['regularization_weight']}  "
-          f"| erasing={aug.get('use_erasing', False)}\n")
+    aug  = cfg.get("augmentation", {})
+    loss = cfg["loss"]
+    print(
+        f"Training for {cfg['training']['epochs']} epochs  "
+        f"| model={cfg['model']['name']}  "
+        f"| sim={loss['similarity']} (w={loss['similarity_weight']})  "
+        f"| reg={loss['regularization']} (w={loss['regularization_weight']})  "
+        f"| jac_det_w={loss.get('jacobian_det_weight', 0.0)}  "
+        f"| log_jac_w={loss.get('log_jacobian_weight', 0.0)}  "
+        f"| erasing={aug.get('use_erasing', False)}\n"
+    )
 
     trainer.fit(
         train_loader=train_loader,

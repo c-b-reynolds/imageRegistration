@@ -1,7 +1,7 @@
 # GateFlow on synthetic shape patches
 
 experiment:
-  name: gate_flow_synthetic
+  name: gate_flow_synthetic_jac_1
   seed: 42
   output_dir: outputs
 
@@ -28,18 +28,18 @@ loss:
   similarity_weight:     1.0
   regularization_weight: 0.1
   ncc_win:               9
-  jacobian_det_weight:   0.1   # set > 0 to enable  — penalises folds only
+  jacobian_det_weight:   100   # set > 0 to enable  — penalises folds only
   jacobian_eps:          1e-3  # margin: penalises det(J) < -eps
-  log_jacobian_weight:   0.1 # set > 0 to enable  — penalises volume change
+  log_jacobian_weight:   200 # set > 0 to enable  — penalises volume change
   log_jacobian_clamp:    1e-5  # clamp det to this before log (avoids log(0))
 
 training:
-  epochs:                   10
+  epochs:                   5
   batch_size:               16
   optimizer:                adam
   lr:                       1.0e-4
   weight_decay:             1.0e-5
-  lr_scheduler:             cosine
+  lr_scheduler:             none
   lr_min:                   1.0e-6
   gradient_clip:            1.0
   early_stopping_patience:  15

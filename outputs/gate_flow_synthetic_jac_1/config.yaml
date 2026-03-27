@@ -8,14 +8,14 @@ data:
   test_frac: 0.15
   val_frac: 0.15
 experiment:
-  name: gate_flow_synthetic
+  name: gate_flow_synthetic_jac_1
   output_dir: outputs
   seed: 42
 loss:
-  jacobian_det_weight: 0.1
+  jacobian_det_weight: 1
   jacobian_eps: 1e-3
   log_jacobian_clamp: 1e-5
-  log_jacobian_weight: 0.2
+  log_jacobian_weight: 2
   ncc_win: 9
   regularization: l2
   regularization_weight: 0.1
@@ -31,16 +31,16 @@ model:
   kernel_size: 8
   n_pe: 256
   n_t: 20
-  name: GateFlow_Jac_Study
+  name: GateFlow
   stride: 4
 training:
   batch_size: 16
   early_stopping_patience: 15
-  epochs: 20
+  epochs: 5
   gradient_clip: 1.0
   lr: 0.0001
   lr_min: 1.0e-06
-  lr_scheduler: cosine
+  lr_scheduler: none
   optimizer: adam
   val_every: 1
   weight_decay: 1.0e-05

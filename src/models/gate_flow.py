@@ -150,6 +150,8 @@ class GateFlowVelocityNet(nn.Module):
                               if None the PE is computed on-the-fly each call
     """
 
+    _ACTIVATIONS = {"relu": nn.ReLU, "gelu": nn.GELU, "tanh": nn.Tanh, "silu": nn.SiLU}
+
     def __init__(
         self,
         in_channels:         int,
@@ -159,6 +161,8 @@ class GateFlowVelocityNet(nn.Module):
         bottleneck_channels: int,
         n_pe:                int,
         image_size:          Optional[List[int]] = None,
+        pe_activation:       Optional[str] = None,
+        pe_type:             str = "fixed",
     ):
         super().__init__()
         C, K, n       = hidden_channels, bottleneck_channels, n_pe
@@ -184,14 +188,34 @@ class GateFlowVelocityNet(nn.Module):
         self.pe_out   = nn.Conv2d(C, n, 1)   # project back to PE space
         self.vel_head = nn.Conv2d(n, 2, 1)   # PE residual -> 2-channel velocity
 
-        # Pre-compute the PE buffer if image_size is known
-        if image_size is not None:
-            H, W = int(image_size[0]), int(image_size[1])
-            H_p = (H + 2 * self.padding - kernel_size) // stride + 1
-            W_p = (W + 2 * self.padding - kernel_size) // stride + 1
-            self.register_buffer("_pe_buf", _make_pe(H_p, W_p, n))
+        if pe_activation is not None:
+            if pe_activation not in self._ACTIVATIONS:
+                raise ValueError(f"Unknown pe_activation '{pe_activation}'. "
+                                 f"Choose from {list(self._ACTIVATIONS)}")
+            self.pe_act = self._ACTIVATIONS[pe_activation]()
         else:
-            self._pe_buf = None
+            self.pe_act = None
+
+        if pe_type not in ("fixed", "learned"):
+            raise ValueError(f"Unknown pe_type '{pe_type}'. Choose from ['fixed', 'learned']")
+        self.pe_type = pe_type
+
+        if image_size is not None:
+            H_img, W_img = int(image_size[0]), int(image_size[1])
+            H_p = (H_img + 2 * self.padding - kernel_size) // stride + 1
+            W_p = (W_img + 2 * self.padding - kernel_size) // stride + 1
+            sinusoidal = _make_pe(H_p, W_p, n)
+            if pe_type == "fixed":
+                self.register_buffer("_pe_buf", sinusoidal)
+                self._learned_pe = None
+            else:  # learned — warm-start from sinusoidal
+                self._pe_buf = None
+                self._learned_pe = nn.Parameter(sinusoidal)
+        else:
+            if pe_type == "learned":
+                raise ValueError("image_size must be provided when pe_type='learned'")
+            self._pe_buf    = None
+            self._learned_pe = None
 
     def forward(self, f: Tensor, g: Tensor) -> Tensor:
         H, W = f.shape[-2], f.shape[-1]
@@ -209,15 +233,19 @@ class GateFlowVelocityNet(nn.Module):
 
         # --- Positional encoding ---
         H_p, W_p = gate.shape[-2], gate.shape[-1]
-        if (self._pe_buf is not None
-                and self._pe_buf.shape[-2] == H_p
-                and self._pe_buf.shape[-1] == W_p):
-            pe = self._pe_buf.to(dtype=f.dtype)     # (1, n, H', W')  cached
+        if self.pe_type == "learned":
+            pe = self._learned_pe.to(dtype=f.dtype)   # (1, n, H', W')  learned
+        elif (self._pe_buf is not None
+              and self._pe_buf.shape[-2] == H_p
+              and self._pe_buf.shape[-1] == W_p):
+            pe = self._pe_buf.to(dtype=f.dtype)        # (1, n, H', W')  cached
         else:
             pe = _make_pe(H_p, W_p, self.n_pe, device=f.device, dtype=f.dtype)
 
         x = self.pe_in(pe)      # (1, C, H', W')  — broadcasts over batch
         x = x * gate            # (N, C, H', W')
+        if self.pe_act is not None:
+            x = self.pe_act(x)
         x = self.pe_out(x)      # (N, n, H', W')
         x = x - pe              # delta PE  (N, n, H', W')
         v = self.vel_head(x)    # (N, 2, H', W')
@@ -284,6 +312,8 @@ class GateFlow(BaseRegistrationModel):
         n_pe:                int                 = 32,
         n_t:                 int                 = 5,
         image_size:          Optional[List[int]] = None,
+        pe_activation:       Optional[str]       = None,
+        pe_type:             str                 = "fixed",
     ):
         super().__init__()
         self.n_t = n_t
@@ -296,6 +326,8 @@ class GateFlow(BaseRegistrationModel):
             bottleneck_channels=bottleneck_channels,
             n_pe=n_pe,
             image_size=image_size,
+            pe_activation=pe_activation,
+            pe_type=pe_type,
         )
 
         self._init_kwargs: Dict[str, Any] = dict(
@@ -307,6 +339,8 @@ class GateFlow(BaseRegistrationModel):
             n_pe=n_pe,
             n_t=n_t,
             image_size=list(image_size) if image_size is not None else None,
+            pe_activation=pe_activation,
+            pe_type=pe_type,
         )
 
     # ------------------------------------------------------------------
@@ -336,10 +370,11 @@ class GateFlow(BaseRegistrationModel):
     def parameter_summary(self) -> str:
         total     = sum(p.numel() for p in self.parameters())
         trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
-        vn = self.velocity_net
+        vn      = self.velocity_net
+        pe_act  = vn.pe_act.__class__.__name__ if vn.pe_act is not None else "none"
         return (
             f"GateFlow  C={vn.C}  K={vn.squeeze.out_channels}  "
             f"k={vn.kernel_size}  s={vn.stride}  n_pe={vn.n_pe}  "
-            f"n_t={self.n_t}\n"
+            f"n_t={self.n_t}  pe_type={vn.pe_type}  pe_act={pe_act}\n"
             f"Parameters: {total:,} total  {trainable:,} trainable"
         )
