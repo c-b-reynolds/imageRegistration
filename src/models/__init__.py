@@ -3,6 +3,7 @@ from .direct_hybrid_registration import DirectHybridRegistration
 from .eulerian_hybrid_registration import EulerianHybridODERegistration
 from .gate_flow import GateFlow
 from .gate_flow_ms import GateFlowMS
+from .gate_flow_ms_attn import GateFlowMSAttn
 from .hybrid_ode_registration import HybridODERegistration
 from .neural_ode_registration import NeuralODERegistration
 from .simple_cnn import SimpleCNN
@@ -18,6 +19,7 @@ REGISTRY: dict = {
     "DirectHybridRegistration": DirectHybridRegistration,
     "GateFlow": GateFlow,
     "GateFlowMS": GateFlowMS,
+    "GateFlowMSAttn": GateFlowMSAttn,
 }
 
 
@@ -34,4 +36,4 @@ def build_model(name: str, **kwargs) -> BaseRegistrationModel:
 __all__ = ["BaseRegistrationModel", "UNetRegistration", "SimpleCNN",
            "NeuralODERegistration", "HybridODERegistration",
            "EulerianHybridODERegistration", "DirectHybridRegistration",
-           "GateFlow", "GateFlowMS", "REGISTRY", "build_model"]
+           "GateFlow", "GateFlowMS", "GateFlowMSAttn", "REGISTRY", "build_model"]

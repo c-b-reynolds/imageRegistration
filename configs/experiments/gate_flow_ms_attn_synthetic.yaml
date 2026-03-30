@@ -1,0 +1,57 @@
+# GateFlowMSAttn on synthetic shape patches
+# Multi-scale + spatial self-attention over the 16×16 coarse feature map.
+# Attention allows well-conditioned locations to propagate gate context into
+# erased or poor-content regions (complements RandomErasing augmentation).
+
+experiment:
+  name: gate_flow_ms_attn_synthetic
+  seed: 42
+  output_dir: outputs
+
+data:
+  patches_path: dataset/synthetic_patches.npy
+  val_frac:  0.15
+  test_frac: 0.15
+  seed: 42
+  num_workers: 0
+
+model:
+  name: GateFlowMSAttn
+  in_channels:         1
+  hidden_channels:     256
+  kernel_size:         8       # k1 — fine stem
+  stride:              4       # s1 — fine resolution: 64/4 = 16×16 tokens
+  kernel_size_2:       16      # k2 — coarse stem
+  stride_2:            8       # s2 — coarse resolution: 64/8 = 8×8
+  bottleneck_channels: 256
+  n_pe:                256
+  n_t:                 20
+  n_heads:             8       # 256 / 8 = 32 dims per head
+  attn_dropout:        0.0
+
+loss:
+  similarity:            ncc
+  regularization:        l2
+  similarity_weight:     1.0
+  regularization_weight: 0.1
+  ncc_win:               9
+  jacobian_det_weight:   0.0
+  jacobian_eps:          1e-3
+  log_jacobian_weight:   0.0
+  log_jacobian_clamp:    1e-5
+
+training:
+  epochs:                   10
+  batch_size:               16
+  optimizer:                adam
+  lr:                       1.0e-4
+  weight_decay:             1.0e-5
+  lr_scheduler:             cosine
+  lr_min:                   1.0e-6
+  gradient_clip:            1.0
+  early_stopping_patience:  15
+  val_every:                1
+
+augmentation:
+  use_rotation: false
+  use_erasing:  true    # RandomErasing enabled — attention stabilises erased regions
